@@ -1,0 +1,336 @@
+// Preserve CHECK constraints in migrations: Prisma Schema does not express them.
+// Use reviewed SQL migrations instead of db push for this project.
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  moduleFormat    = "esm"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Classification {
+  INVESTIGATE
+  WATCH
+  IGNORE
+
+  @@map("classification")
+}
+
+enum DeliveryStatus {
+  sending
+  sent
+  failed
+  unknown
+
+  @@map("delivery_status")
+}
+
+enum EvidenceKind {
+  official_announcement
+  news
+
+  @@map("evidence_kind")
+}
+
+enum InstrumentKind {
+  equity
+  index
+
+  @@map("instrument_kind")
+}
+
+enum JobStatus {
+  pending
+  running
+  retry
+  succeeded
+  failed
+
+  @@map("job_status")
+}
+
+enum OutcomeStatus {
+  pending
+  completed
+  unavailable
+
+  @@map("outcome_status")
+}
+
+enum PriceBasis {
+  unadjusted
+  adjusted
+
+  @@map("price_basis")
+}
+
+enum SignalOrigin {
+  movement
+  announcement
+
+  @@map("signal_origin")
+}
+
+model Instrument {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  exchange      String
+  symbol        String
+  name          String
+  kind          InstrumentKind @default(equity)
+  isin          String?
+  kiteToken     BigInt?        @map("kite_token")
+  sector        String?
+  benchmarkId   String?        @map("benchmark_id") @db.Uuid
+  sectorIndexId String?        @map("sector_index_id") @db.Uuid
+  inUniverse    Boolean        @default(false) @map("in_universe")
+  active        Boolean        @default(true)
+  refreshedAt   DateTime?      @map("refreshed_at") @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  announcements            Announcement[]       @relation("announcements_instrument_id_instruments_id_fk")
+  benchmark                Instrument?          @relation("instruments_benchmark_id_instruments_id_fk", fields: [benchmarkId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_benchmark_id_instruments_id_fk")
+  instrumentsAsBenchmark   Instrument[]         @relation("instruments_benchmark_id_instruments_id_fk")
+  sectorIndex              Instrument?          @relation("instruments_sector_index_id_instruments_id_fk", fields: [sectorIndexId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_sector_index_id_instruments_id_fk")
+  instrumentsAsSectorIndex Instrument[]         @relation("instruments_sector_index_id_instruments_id_fk")
+  performanceOutcomes      PerformanceOutcome[] @relation("performance_outcomes_benchmark_id_instruments_id_fk")
+  signals                  Signal[]             @relation("signals_instrument_id_instruments_id_fk")
+
+  @@unique([exchange, symbol], map: "instruments_exchange_symbol_unique")
+  @@unique([kiteToken], map: "instruments_kite_token_unique")
+  @@index([inUniverse, active], map: "instruments_universe_idx")
+  @@map("instruments")
+}
+
+model Announcement {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  instrumentId String   @map("instrument_id") @db.Uuid
+  source       String
+  sourceId     String   @map("source_id")
+  title        String
+  url          String
+  category     String?
+  publishedAt  DateTime @map("published_at") @db.Timestamptz(6)
+  discoveredAt DateTime @default(now()) @map("discovered_at") @db.Timestamptz(6)
+  contentHash  String?  @map("content_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  instrument Instrument @relation("announcements_instrument_id_instruments_id_fk", fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "announcements_instrument_id_instruments_id_fk")
+  signals    Signal[]   @relation("signals_announcement_instrument_fk")
+
+  @@unique([source, sourceId, instrumentId], map: "announcements_source_unique")
+  @@unique([id, instrumentId], map: "announcements_id_instrument_unique")
+  @@index([instrumentId, publishedAt], map: "announcements_instrument_published_idx")
+  @@map("announcements")
+}
+
+model Signal {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  instrumentId       String       @map("instrument_id") @db.Uuid
+  origin             SignalOrigin
+  announcementId     String?      @map("announcement_id") @db.Uuid
+  dedupeKey          String       @map("dedupe_key")
+  detectorVersion    String       @map("detector_version")
+  observedAt         DateTime     @map("observed_at") @db.Timestamptz(6)
+  windowStart        DateTime?    @map("window_start") @db.Timestamptz(6)
+  price              Decimal?     @db.Decimal(20, 6)
+  referencePrice     Decimal?     @map("reference_price") @db.Decimal(20, 6)
+  priceChangePct     Decimal?     @map("price_change_pct") @db.Decimal(18, 8)
+  relativeVolume     Decimal?     @map("relative_volume") @db.Decimal(18, 6)
+  benchmarkReturnPct Decimal?     @map("benchmark_return_pct") @db.Decimal(18, 8)
+  sectorReturnPct    Decimal?     @map("sector_return_pct") @db.Decimal(18, 8)
+  volatilityScore    Decimal?     @map("volatility_score") @db.Decimal(18, 8)
+  context            Json         @default("{}") @db.JsonB
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  alerts         Alert[]          @relation("alerts_signal_id_signals_id_fk")
+  analyses       Analysis[]       @relation("analyses_signal_id_signals_id_fk")
+  jobs           Job[]            @relation("jobs_signal_id_signals_id_fk")
+  signalEvidence SignalEvidence[] @relation("signal_evidence_signal_id_signals_id_fk")
+  instrument     Instrument       @relation("signals_instrument_id_instruments_id_fk", fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "signals_instrument_id_instruments_id_fk")
+  announcement   Announcement?    @relation("signals_announcement_instrument_fk", fields: [announcementId, instrumentId], references: [id, instrumentId], onDelete: NoAction, onUpdate: NoAction, map: "signals_announcement_instrument_fk")
+
+  @@unique([dedupeKey], map: "signals_dedupe_key_unique")
+  @@index([instrumentId, observedAt], map: "signals_instrument_observed_idx")
+  @@index([announcementId], map: "signals_announcement_idx")
+  @@map("signals")
+}
+
+model SignalEvidence {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  signalId    String       @map("signal_id") @db.Uuid
+  kind        EvidenceKind
+  url         String
+  title       String
+  publisher   String?
+  excerpt     String?
+  publishedAt DateTime?    @map("published_at") @db.Timestamptz(6)
+  retrievedAt DateTime     @default(now()) @map("retrieved_at") @db.Timestamptz(6)
+  contentHash String?      @map("content_hash")
+
+  signal Signal @relation("signal_evidence_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "signal_evidence_signal_id_signals_id_fk")
+
+  @@unique([signalId, url], map: "signal_evidence_signal_url_unique")
+  @@map("signal_evidence")
+}
+
+model Analysis {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  signalId         String   @map("signal_id") @db.Uuid
+  provider         String
+  model            String
+  promptVersion    String   @map("prompt_version")
+  summary          String
+  catalyst         String?
+  catalystVerified Boolean  @default(false) @map("catalyst_verified")
+  risks            Json     @default("[]") @db.JsonB
+  uncertainties    Json     @default("[]") @db.JsonB
+  assessment       Json     @default("{}") @db.JsonB
+  inputTokens      Int?     @map("input_tokens")
+  outputTokens     Int?     @map("output_tokens")
+  costInr          Decimal? @map("cost_inr") @db.Decimal(14, 6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  alerts Alert[] @relation("alerts_analysis_signal_fk")
+  signal Signal  @relation("analyses_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "analyses_signal_id_signals_id_fk")
+
+  @@unique([id, signalId], map: "analyses_id_signal_unique")
+  @@index([signalId, createdAt], map: "analyses_signal_created_idx")
+  @@map("analyses")
+}
+
+model Alert {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  signalId       String         @map("signal_id") @db.Uuid
+  analysisId     String?        @map("analysis_id") @db.Uuid
+  dedupeKey      String         @map("dedupe_key")
+  classification Classification
+  rulesVersion   String         @map("rules_version")
+  reason         String
+  message        String
+  telegramChatId String         @map("telegram_chat_id")
+  firstSentAt    DateTime?      @map("first_sent_at") @db.Timestamptz(6)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  signal              Signal               @relation("alerts_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "alerts_signal_id_signals_id_fk")
+  analysis            Analysis?            @relation("alerts_analysis_signal_fk", fields: [analysisId, signalId], references: [id, signalId], onDelete: NoAction, onUpdate: NoAction, map: "alerts_analysis_signal_fk")
+  deliveryAttempts    DeliveryAttempt[]    @relation("delivery_attempts_alert_id_alerts_id_fk")
+  feedback            Feedback[]           @relation("feedback_alert_id_alerts_id_fk")
+  jobs                Job[]                @relation("jobs_alert_id_alerts_id_fk")
+  performanceOutcomes PerformanceOutcome[] @relation("performance_outcomes_alert_id_alerts_id_fk")
+
+  @@unique([dedupeKey], map: "alerts_dedupe_key_unique")
+  @@index([signalId], map: "alerts_signal_idx")
+  @@index([createdAt], map: "alerts_created_idx")
+  @@map("alerts")
+}
+
+model DeliveryAttempt {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId           String         @map("alert_id") @db.Uuid
+  attempt           Int
+  status            DeliveryStatus @default(sending)
+  telegramMessageId String?        @map("telegram_message_id")
+  errorCode         String?        @map("error_code")
+  startedAt         DateTime       @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime?      @map("finished_at") @db.Timestamptz(6)
+
+  alert Alert @relation("delivery_attempts_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_attempts_alert_id_alerts_id_fk")
+
+  @@unique([alertId, attempt], map: "delivery_attempts_alert_attempt_unique")
+  @@map("delivery_attempts")
+}
+
+model Job {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind          String
+  dedupeKey     String    @map("dedupe_key")
+  signalId      String?   @map("signal_id") @db.Uuid
+  alertId       String?   @map("alert_id") @db.Uuid
+  payload       Json      @default("{}") @db.JsonB
+  status        JobStatus @default(pending)
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(5) @map("max_attempts")
+  runAfter      DateTime  @default(now()) @map("run_after") @db.Timestamptz(6)
+  lockedBy      String?   @map("locked_by")
+  lockedUntil   DateTime? @map("locked_until") @db.Timestamptz(6)
+  lastErrorCode String?   @map("last_error_code")
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  signal Signal? @relation("jobs_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_signal_id_signals_id_fk")
+  alert  Alert?  @relation("jobs_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_alert_id_alerts_id_fk")
+
+  @@unique([dedupeKey], map: "jobs_dedupe_key_unique")
+  @@index([status, runAfter], map: "jobs_runnable_idx")
+  @@index([lockedUntil], map: "jobs_lease_expiry_idx", where: { status: "running" })
+  @@index([signalId], map: "jobs_signal_idx")
+  @@index([alertId], map: "jobs_alert_idx")
+  @@map("jobs")
+}
+
+model PollingCheckpoint {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source          String
+  scope           String
+  cursor          Json      @default("{}") @db.JsonB
+  lastPublishedAt DateTime? @map("last_published_at") @db.Timestamptz(6)
+  lastSuccessAt   DateTime? @map("last_success_at") @db.Timestamptz(6)
+  lastAttemptAt   DateTime? @map("last_attempt_at") @db.Timestamptz(6)
+  lastErrorCode   String?   @map("last_error_code")
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([source, scope], map: "polling_checkpoints_source_scope_unique")
+  @@map("polling_checkpoints")
+}
+
+model Feedback {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId        String   @map("alert_id") @db.Uuid
+  telegramUserId String   @map("telegram_user_id")
+  useful         Boolean
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  alert Alert @relation("feedback_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feedback_alert_id_alerts_id_fk")
+
+  @@unique([alertId, telegramUserId], map: "feedback_alert_user_unique")
+  @@map("feedback")
+}
+
+model PerformanceOutcome {
+  id                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId                 String        @map("alert_id") @db.Uuid
+  horizonTradingDays      Int           @map("horizon_trading_days")
+  status                  OutcomeStatus @default(pending)
+  referenceSession        DateTime?     @map("reference_session") @db.Date
+  dueSession              DateTime?     @map("due_session") @db.Date
+  referenceAt             DateTime?     @map("reference_at") @db.Timestamptz(6)
+  observedAt              DateTime?     @map("observed_at") @db.Timestamptz(6)
+  referencePrice          Decimal?      @map("reference_price") @db.Decimal(20, 6)
+  observedPrice           Decimal?      @map("observed_price") @db.Decimal(20, 6)
+  benchmarkId             String?       @map("benchmark_id") @db.Uuid
+  benchmarkReferencePrice Decimal?      @map("benchmark_reference_price") @db.Decimal(20, 6)
+  benchmarkObservedPrice  Decimal?      @map("benchmark_observed_price") @db.Decimal(20, 6)
+  stockReturnPct          Decimal?      @map("stock_return_pct") @db.Decimal(18, 8)
+  benchmarkReturnPct      Decimal?      @map("benchmark_return_pct") @db.Decimal(18, 8)
+  excessReturnPct         Decimal?      @map("excess_return_pct") @db.Decimal(18, 8)
+  priceBasis              PriceBasis    @default(unadjusted) @map("price_basis")
+  methodologyVersion      String        @map("methodology_version")
+  unavailableReason       String?       @map("unavailable_reason")
+  notes                   Json          @default("{}") @db.JsonB
+  measuredAt              DateTime?     @map("measured_at") @db.Timestamptz(6)
+  createdAt               DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  alert     Alert       @relation("performance_outcomes_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "performance_outcomes_alert_id_alerts_id_fk")
+  benchmark Instrument? @relation("performance_outcomes_benchmark_id_instruments_id_fk", fields: [benchmarkId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "performance_outcomes_benchmark_id_instruments_id_fk")
+
+  @@unique([alertId, horizonTradingDays], map: "performance_outcomes_alert_horizon_unique")
+  @@index([status, dueSession], map: "performance_outcomes_due_idx")
+  @@map("performance_outcomes")
+}
