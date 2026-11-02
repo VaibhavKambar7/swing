@@ -1,10 +1,12 @@
 # Working on Swing
 
-- Read `PROGRESS.md` before starting work. Implement one subpart at a time and
-  prioritize a useful running version over advanced features.
-- Update `PROGRESS.md` after each implemented subpart, validation result, or new
-  blocker. Keep completed work, unverified behavior, and blocked work distinct.
-  Never mark a live integration complete based solely on fixtures or mocks.
+- Implement one subpart at a time and prioritize a useful running version over
+  advanced features.
+- Keep shared project progress and task checklists in Google Docs, not in the
+  repository. Do not add or push progress reports to GitHub. Agent guidance and
+  documentation needed to develop and run the application may remain here.
+- Keep completed work, unverified behavior, and blocked work distinct. Never mark
+  a live integration complete based solely on fixtures or mocks.
 - Give the user concise progress updates during work and report the current
   subpart, evidence, blockers, and next step when finishing.
 - The user prefers commits pushed directly to `main`; do not introduce a work
@@ -16,4 +18,4 @@
 - Google Docs progress syncing was requested but no Docs connector was available
   when these instructions were written. Do not claim syncing is configured.
   If a writable Docs connector and target document become available, maintain
-  the progress checklist there too without copying secrets.
+  the shared progress checklist there without copying secrets.
