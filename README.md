@@ -101,7 +101,43 @@ retained and retried on the next run after stock-list edits. Established matches
 are left unchanged, including their check timestamps; changing a known match
 requires an explicit database correction. The command processes the inbox in
 batches and reports counts for this run. It does not promote feed items into
-research signals, filter noise, call AI, or deliver notifications.
+research signals, call AI, or deliver notifications. Relevance filtering is a
+separate manual step described below.
+
+## Announcement relevance filtering
+
+After fetching and matching announcements:
+
+```sh
+npm run db:migrate
+npm run announcements:match
+npm run announcements:filter
+```
+
+The manual filter processes matched NSE announcements only for active equities in
+our configured universe. It stores the latest relevance decision, reason code,
+rule version, and check timestamp on each `feed_items` row:
+
+- `keep`: subject or description contains a potentially material event cue.
+- `routine`: an exact recognized trading-window, share-certificate, or Regulation
+  74(5) depository-certificate subject with an absent or recognized routine body.
+- `review`: unfamiliar wording, encoded content, unexpectedly large text, or a
+  routine-looking title with an unrecognized body; retain it for research.
+- `pending`: not yet filtered, including unmatched and ambiguous issuer records.
+
+This is a conservative heuristic, not a financial assessment. An important-event
+cue overrides routine rules. No item is deleted, and raw titles, descriptions,
+links, publication/discovery times, and issuer matches are preserved. `routine`
+is not the research assessment `IGNORE`; no AI call or alert is triggered here.
+Review rows and reasons in Prisma Studio (`npm run db:studio`).
+
+Repeated commands leave decisions from the current rule version unchanged,
+including timestamps. Bumping `RELEVANCE_RULE_VERSION` re-evaluates older versions.
+Overlapping runs update each eligible item once per version. Manually clearing a
+match/decision requires setting relevance back to `pending` and clearing its
+reason, version, and check time together. Decisions retain the latest result,
+not a full change-history log. The rules still need validation against actual
+feed samples once live NSE access is verified.
 
 ## Health checks
 

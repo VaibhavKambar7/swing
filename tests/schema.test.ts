@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "../src/generated/prisma/client";
+import { filterStoredAnnouncements, RELEVANCE_RULE_VERSION } from "../src/lib/announcements/filter";
 import { storeAnnouncements } from "../src/lib/announcements/ingest";
 import { matchStoredAnnouncements } from "../src/lib/announcements/match";
 import { seedStarterUniverse } from "../src/lib/instruments/starter-universe";
@@ -76,6 +77,81 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("filters matched announcements with reasons while preserving the raw inbox", async () => {
+    await seedStarterUniverse(db);
+    await storeAnnouncements(db, [
+      { sourceId: "results", title: "TCS - Financial Results", url: "https://example.com/results", description: "Quarterly results", publishedAt: new Date("2026-11-02T03:15:00Z") },
+      { sourceId: "routine", title: "TCS - Trading Window Closure", url: "https://example.com/window", description: null, publishedAt: null },
+      { sourceId: "unknown-subject", title: "TCS - Update", url: "https://example.com/update", description: null, publishedAt: null },
+      { sourceId: "unknown-stock", title: "NEWCO - Trading Window Closure", url: "https://example.com/unknown", description: null, publishedAt: null },
+    ]);
+    await matchStoredAnnouncements(db);
+    const before = await db.feedItem.findMany({ orderBy: { id: "asc" } });
+    const checked = new Date("2026-11-02T12:00:00Z");
+    expect(await filterStoredAnnouncements(db, () => checked)).toEqual({ keep: 1, routine: 1, review: 1 });
+    const after = await db.feedItem.findMany({ orderBy: { id: "asc" } });
+    for (const [i, row] of after.entries()) {
+      const original = before[i];
+      expect(row).toMatchObject({ title: original.title, url: original.url, description: original.description, publishedAt: original.publishedAt, discoveredAt: original.discoveredAt, instrumentId: original.instrumentId });
+      if (row.matchStatus === "matched") {
+        expect(row.relevanceRuleVersion).toBe(RELEVANCE_RULE_VERSION);
+        expect(row.relevanceReason).toBeTruthy();
+        expect(row.relevanceCheckedAt).toEqual(checked);
+      } else {
+        expect(row.relevanceStatus).toBe("pending");
+        expect(row.relevanceCheckedAt).toBeNull();
+      }
+    }
+    expect(await filterStoredAnnouncements(db)).toEqual({ keep: 0, routine: 0, review: 0 });
+    expect(await db.feedItem.findMany({ orderBy: { id: "asc" } })).toEqual(after);
+  });
+  it("reprocesses decisions from older rule versions without replacing current decisions", async () => {
+    await seedStarterUniverse(db);
+    const instrument = await db.instrument.findFirstOrThrow({ where: { symbol: "TCS" } });
+    const old = await db.feedItem.create({ data: {
+      source: NSE_SOURCE, sourceId: "old-rules", title: "TCS - Financial Results", url: "https://example.com/old",
+      matchStatus: "matched", instrumentId: instrument.id, relevanceStatus: "routine", relevanceReason: "OLD_RULE",
+      relevanceRuleVersion: "old-version", relevanceCheckedAt: new Date("2026-01-01T00:00:00Z"),
+    } });
+    expect(await filterStoredAnnouncements(db)).toEqual({ keep: 1, routine: 0, review: 0 });
+    expect(await db.feedItem.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ relevanceStatus: "keep", relevanceRuleVersion: RELEVANCE_RULE_VERSION });
+  });
+  it("filters across batches and repeated or overlapping runs count each item once", async () => {
+    await seedStarterUniverse(db);
+    await storeAnnouncements(db, Array.from({ length: 103 }, (_, i) => ({
+      sourceId: `routine-${i}`, title: "TCS - Trading Window", url: `https://example.com/${i}`, description: null, publishedAt: null,
+    })));
+    await matchStoredAnnouncements(db);
+    const runs = await Promise.all([filterStoredAnnouncements(db), filterStoredAnnouncements(db)]);
+    expect(runs.reduce((sum, result) => sum + result.routine, 0)).toBe(103);
+    expect(await db.feedItem.count({ where: { relevanceStatus: "routine" } })).toBe(103);
+    expect(await db.feedItem.count()).toBe(103);
+  });
+  it("leaves inactive, out-of-universe, foreign-feed, unmatched, and ambiguous items pending", async () => {
+    await seedStarterUniverse(db);
+    const tcs = await db.instrument.findFirstOrThrow({ where: { symbol: "TCS" } });
+    const inactive = await db.instrument.findFirstOrThrow({ where: { symbol: "INFY" } });
+    const excluded = await db.instrument.findFirstOrThrow({ where: { symbol: "HDFCBANK" } });
+    await db.instrument.update({ where: { id: inactive.id }, data: { active: false } });
+    await db.instrument.update({ where: { id: excluded.id }, data: { inUniverse: false } });
+    const base = { source: NSE_SOURCE, title: "TCS - Trading Window", url: "https://example.com/notice" };
+    await db.feedItem.createMany({ data: [
+      { ...base, sourceId: "inactive", matchStatus: "matched", instrumentId: inactive.id },
+      { ...base, sourceId: "excluded", matchStatus: "matched", instrumentId: excluded.id },
+      { ...base, source: "other", sourceId: "other-feed", matchStatus: "matched", instrumentId: tcs.id },
+      { ...base, sourceId: "unmatched", matchStatus: "unmatched" },
+      { ...base, sourceId: "ambiguous", matchStatus: "ambiguous" },
+    ] });
+    expect(await filterStoredAnnouncements(db)).toEqual({ keep: 0, routine: 0, review: 0 });
+    expect(await db.feedItem.count({ where: { relevanceStatus: "pending" } })).toBe(5);
+  });
+  it("enforces complete relevance metadata and a matched issuer in the database", async () => {
+    await seedStarterUniverse(db);
+    const stock = await db.instrument.findFirstOrThrow();
+    const base = { source: NSE_SOURCE, sourceId: "invalid-relevance", title: "Results", url: "https://example.com" };
+    await rejectsConstraint(db.feedItem.create({ data: { ...base, matchStatus: "matched", instrumentId: stock.id, relevanceStatus: "keep" } }), "feed_items_relevance_complete");
+    await rejectsConstraint(db.feedItem.create({ data: { ...base, relevanceStatus: "routine", relevanceReason: "RULE", relevanceRuleVersion: "v1", relevanceCheckedAt: new Date() } }), "feed_items_relevance_requires_match");
+  });
   it("seeds starter stocks repeatably without replacing existing settings or memberships", async () => {
     const existing = await db.instrument.create({ data: { exchange: "NSE", symbol: "TCS", name: "Custom name", inUniverse: false } });
     expect(await seedStarterUniverse(db)).toEqual({ inserted: 5 });

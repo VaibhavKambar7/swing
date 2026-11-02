@@ -21,7 +21,8 @@
     "db:studio": "prisma studio",
     "announcements:fetch": "node --use-env-proxy --import tsx scripts/ingest-announcements.ts",
     "universe:seed": "tsx scripts/seed-universe.ts",
-    "announcements:match": "tsx scripts/match-announcements.ts"
+    "announcements:match": "tsx scripts/match-announcements.ts",
+    "announcements:filter": "tsx scripts/filter-announcements.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

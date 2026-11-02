@@ -83,24 +83,38 @@ enum FeedMatchStatus {
   @@map("feed_match_status")
 }
 
+enum FeedRelevanceStatus {
+  pending
+  keep
+  routine
+  review
+
+  @@map("feed_relevance_status")
+}
+
 // Raw inbox: retain source items independently of successful company matching.
 model FeedItem {
-  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source         String
-  sourceId       String          @map("source_id")
-  title          String
-  url            String
-  description    String?
-  publishedAt    DateTime?        @map("published_at") @db.Timestamptz(6)
-  discoveredAt   DateTime         @default(now()) @map("discovered_at") @db.Timestamptz(6)
-  matchStatus    FeedMatchStatus @default(pending) @map("match_status")
-  matchCheckedAt DateTime?        @map("match_checked_at") @db.Timestamptz(6)
-  instrumentId   String?          @map("instrument_id") @db.Uuid
-  instrument     Instrument?     @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
+  id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source               String
+  sourceId             String              @map("source_id")
+  title                String
+  url                  String
+  description          String?
+  publishedAt          DateTime?           @map("published_at") @db.Timestamptz(6)
+  discoveredAt         DateTime            @default(now()) @map("discovered_at") @db.Timestamptz(6)
+  matchStatus          FeedMatchStatus     @default(pending) @map("match_status")
+  matchCheckedAt       DateTime?           @map("match_checked_at") @db.Timestamptz(6)
+  relevanceStatus      FeedRelevanceStatus @default(pending) @map("relevance_status")
+  relevanceReason      String?             @map("relevance_reason")
+  relevanceRuleVersion String?             @map("relevance_rule_version")
+  relevanceCheckedAt   DateTime?           @map("relevance_checked_at") @db.Timestamptz(6)
+  instrumentId         String?             @map("instrument_id") @db.Uuid
+  instrument           Instrument?         @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
 
   @@unique([source, sourceId], map: "feed_items_source_unique")
   @@index([discoveredAt], map: "feed_items_discovered_idx")
   @@index([instrumentId], map: "feed_items_instrument_idx")
+  @@index([matchStatus, relevanceStatus, id], map: "feed_items_relevance_idx")
   @@map("feed_items")
 }
 
