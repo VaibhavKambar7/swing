@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "../src/generated/prisma/client";
+import { storeAnnouncements } from "../src/lib/announcements/ingest";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -34,7 +35,7 @@ afterAll(async () => {
   await engine?.close();
 });
 beforeEach(async () => {
-  await db.$executeRaw`TRUNCATE instruments, announcements, signals, signal_evidence,
+  await db.$executeRaw`TRUNCATE feed_items, instruments, announcements, signals, signal_evidence,
     analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback,
     performance_outcomes CASCADE`;
 });
@@ -72,6 +73,16 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("stores unmatched announcements and deduplicates concurrent ingestion without changing discovery time", async () => {
+    const item = { sourceId: "filing-1", title: "Example results", url: "https://example.com/1", description: null, publishedAt: null };
+    const results = await Promise.all([storeAnnouncements(db, [item, item]), storeAnnouncements(db, [item])]);
+    expect(results.reduce((sum, result) => sum + result.inserted, 0)).toBe(1);
+    const first = await db.feedItem.findFirstOrThrow();
+    expect(await storeAnnouncements(db, [item])).toEqual({ received: 1, inserted: 0, duplicates: 1 });
+    expect(await db.feedItem.count()).toBe(1);
+    expect((await db.feedItem.findFirstOrThrow()).discoveredAt).toEqual(first.discoveredAt);
+    expect(first.publishedAt).toBeNull();
+  });
   it("can deploy migrations twice without applying a migration twice", async () => {
     const before = await db.$queryRaw<{ total: bigint }[]>`SELECT count(*) AS total FROM _prisma_migrations WHERE finished_at IS NOT NULL`;
     await migrate();

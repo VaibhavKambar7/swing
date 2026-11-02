@@ -1,6 +1,6 @@
 # Swing
 
-A personal Indian stock research assistant. Tasks 1–2 provide the application foundation and initial database schema. Market integrations are not implemented yet.
+A personal Indian stock research assistant. The application foundation and initial database schema are implemented. The first announcement ingestion slice adds a manual NSE RSS fetch and a deduplicated database inbox. Stock matching, scheduling, price monitoring, AI research, and alert delivery are still pending. Website alerts are the preferred delivery direction, with email an optional later addition.
 
 ## Requirements
 
@@ -35,6 +35,38 @@ npm run worker:dev
 ```
 
 Open [Swing](http://localhost:3000). Without PostgreSQL, the web page and liveness checks still work; readiness reports HTTP 503, and the worker retries its database check every 10 seconds.
+
+## Announcement ingestion — first working slice
+
+Apply the new inbox migration, then fetch once:
+
+```sh
+npm run db:migrate
+npm run announcements:fetch
+```
+
+The command requests `https://nsearchives.nseindia.com/content/RSS/Online_announcements.xml`
+and stores valid entries in `feed_items`. It reports received, inserted, duplicate,
+and skipped counts. Repeating the command leaves already-seen entries and their
+discovery times unchanged. RSS GUID is the source ID, with the link as a fallback.
+Missing or invalid publication dates stay unknown rather than being replaced by
+the fetch time. Malformed items are counted as skipped; malformed XML, non-RSS
+responses, oversized responses, and failed HTTP requests fail the command.
+
+This is a raw inbox: company matching happens later, so an unknown company does
+not prevent ingestion. Descriptions may contain publisher HTML; treat them as
+untrusted text and do not render them as raw HTML. No messages are sent, and no
+automatic polling or AI analysis is enabled in this slice. Existing entries are
+immutable; detecting revisions is a later feature. The first run imports the
+current feed window, which may include older announcements.
+
+The command uses Node 24's `--use-env-proxy` flag to respect configured HTTP(S)
+proxies. Cloud network settings must allow `nsearchives.nseindia.com`. Live feed
+access was blocked by the cloud proxy during implementation; the endpoint and
+current feed shape still need a live smoke check once access is applied. Parser
+fixtures and Prisma/PGlite integration tests cover storage and duplicate handling
+without relying on external network access. A feed is only a rolling window and
+does not guarantee complete historical announcement coverage.
 
 ## Health checks
 

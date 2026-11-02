@@ -74,6 +74,22 @@ enum SignalOrigin {
   @@map("signal_origin")
 }
 
+// Raw inbox: preserve announcements even before company matching is implemented.
+model FeedItem {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source       String
+  sourceId     String   @map("source_id")
+  title        String
+  url          String
+  description  String?
+  publishedAt  DateTime? @map("published_at") @db.Timestamptz(6)
+  discoveredAt DateTime @default(now()) @map("discovered_at") @db.Timestamptz(6)
+
+  @@unique([source, sourceId], map: "feed_items_source_unique")
+  @@index([discoveredAt], map: "feed_items_discovered_idx")
+  @@map("feed_items")
+}
+
 model Instrument {
   id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   exchange      String

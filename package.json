@@ -18,12 +18,14 @@
     "db:validate": "prisma validate",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:create": "prisma migrate dev --create-only",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "announcements:fetch": "node --use-env-proxy --import tsx scripts/ingest-announcements.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
+    "fast-xml-parser": "5.11.2",
     "next": "16.4.3",
     "pg": "^8.23.1",
     "react": "19.3.0",
