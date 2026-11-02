@@ -1,6 +1,6 @@
 # Swing
 
-A personal Indian stock research assistant. The application foundation and initial database schema are implemented. The first announcement ingestion slice adds a manual NSE RSS fetch and a deduplicated database inbox. Stock matching, scheduling, price monitoring, AI research, and alert delivery are still pending. Website alerts are the preferred delivery direction, with email an optional later addition.
+A personal Indian stock research assistant built with Next.js, a persistent TypeScript worker, and PostgreSQL/Prisma. Manual commands fetch announcement RSS into a deduplicated inbox and match issuer headings to a configured stock universe. Website alerts are the preferred delivery direction, with email an optional later addition.
 
 ## Requirements
 
@@ -53,12 +53,13 @@ Missing or invalid publication dates stay unknown rather than being replaced by
 the fetch time. Malformed items are counted as skipped; malformed XML, non-RSS
 responses, oversized responses, and failed HTTP requests fail the command.
 
-This is a raw inbox: company matching happens later, so an unknown company does
-not prevent ingestion. Descriptions may contain publisher HTML; treat them as
+This is a raw inbox: unknown companies do not prevent ingestion. Matching is a
+separate operation described below. Descriptions may contain publisher HTML; treat them as
 untrusted text and do not render them as raw HTML. No messages are sent, and no
 automatic polling or AI analysis is enabled in this slice. Existing entries are
 immutable; detecting revisions is a later feature. The first run imports the
-current feed window, which may include older announcements.
+current feed window, which may include older announcements. Raw source fields are
+immutable; matching only updates the stock link and matching metadata.
 
 The command uses Node 24's `--use-env-proxy` flag to respect configured HTTP(S)
 proxies. Cloud network settings must allow `nsearchives.nseindia.com`. Live feed
@@ -67,6 +68,40 @@ current feed shape still need a live smoke check once access is applied. Parser
 fixtures and Prisma/PGlite integration tests cover storage and duplicate handling
 without relying on external network access. A feed is only a rolling window and
 does not guarantee complete historical announcement coverage.
+
+## Stock universe and announcement matching
+
+```sh
+npm run db:migrate
+npm run universe:seed
+npm run announcements:fetch
+npm run announcements:match
+```
+
+`universe:seed` inserts six starter NSE equities: RELIANCE, TCS, INFY, HDFCBANK,
+ICICIBANK, and ATHERENERG. It is a small starting list, not an index constituent
+list or investment recommendation. Repeating the seed inserts only missing
+stocks and preserves existing names, active flags, and universe membership. Edit
+`src/lib/instruments/starter-universe.ts` before seeding to change the starter
+list; existing database records can be managed with `npm run db:studio`.
+
+`announcements:match` works on already-stored NSE feed items, so it can run
+independently of feed access. It considers only active NSE equities with
+`inUniverse = true`. It matches an issuer heading such as `TCS - Financial
+Results` or `Tata Consultancy Services Ltd. - Updates` to a symbol or company
+name, ignoring case, punctuation and the Ltd/Limited variation. It does not infer
+the issuer from names mentioned in the body or use fuzzy matching. Titles with
+unrecognized structures stay unmatched. Hyphenated company names may require a
+future source-specific issuer field or alias support.
+
+Feed items have `pending`, `matched`, `unmatched`, or `ambiguous` match status, a
+stock link when matched, and a check timestamp. Multiple candidate companies
+produce an ambiguous result with no link. Unmatched and ambiguous items are
+retained and retried on the next run after stock-list edits. Established matches
+are left unchanged, including their check timestamps; changing a known match
+requires an explicit database correction. The command processes the inbox in
+batches and reports counts for this run. It does not promote feed items into
+research signals, filter noise, call AI, or deliver notifications.
 
 ## Health checks
 

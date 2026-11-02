@@ -6,6 +6,9 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { storeAnnouncements } from "../src/lib/announcements/ingest";
+import { matchStoredAnnouncements } from "../src/lib/announcements/match";
+import { seedStarterUniverse } from "../src/lib/instruments/starter-universe";
+import { NSE_SOURCE, parseAnnouncements } from "../src/lib/announcements/rss";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -73,6 +76,52 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("seeds starter stocks repeatably without replacing existing settings or memberships", async () => {
+    const existing = await db.instrument.create({ data: { exchange: "NSE", symbol: "TCS", name: "Custom name", inUniverse: false } });
+    expect(await seedStarterUniverse(db)).toEqual({ inserted: 5 });
+    expect(await seedStarterUniverse(db)).toEqual({ inserted: 0 });
+    expect(await db.instrument.findUniqueOrThrow({ where: { id: existing.id } })).toMatchObject({ name: "Custom name", inUniverse: false });
+    expect(await db.instrument.count()).toBe(6);
+  });
+  it("parses, stores and matches an announcement while preserving source text and dates", async () => {
+    await seedStarterUniverse(db);
+    const { items } = parseAnnouncements('<rss><channel><item><guid>tcs-results</guid><title>TCS - Financial Results</title><link>https://example.com/results</link><pubDate>Mon, 02 Nov 2026 08:45:00 +0530</pubDate></item></channel></rss>');
+    await storeAnnouncements(db, items);
+    const original = await db.feedItem.findFirstOrThrow();
+    expect(await matchStoredAnnouncements(db)).toEqual({ matched: 1, unmatched: 0, ambiguous: 0 });
+    const item = await db.feedItem.findFirstOrThrow({ include: { instrument: true } });
+    expect(item).toMatchObject({ matchStatus: "matched", title: original.title, publishedAt: original.publishedAt, discoveredAt: original.discoveredAt, instrument: { symbol: "TCS" } });
+    expect(item.matchCheckedAt).not.toBeNull();
+    expect(await matchStoredAnnouncements(db)).toEqual({ matched: 0, unmatched: 0, ambiguous: 0 });
+    expect((await db.feedItem.findFirstOrThrow()).matchCheckedAt).toEqual(item.matchCheckedAt);
+  });
+  it("retains unmatched and ambiguous items and rematches after universe expansion", async () => {
+    await seedStarterUniverse(db);
+    await db.instrument.create({ data: { exchange: "NSE", symbol: "INFY2", name: "Infosys Ltd", inUniverse: true } });
+    await storeAnnouncements(db, [
+      { sourceId: "unknown", title: "NEWCO - Results", url: "https://example.com/new", description: null, publishedAt: null },
+      { sourceId: "ambiguous", title: "Infosys Limited - Results", url: "https://example.com/ambiguous", description: null, publishedAt: null },
+    ]);
+    expect(await matchStoredAnnouncements(db)).toEqual({ matched: 0, unmatched: 1, ambiguous: 1 });
+    expect(await db.feedItem.count({ where: { instrumentId: null } })).toBe(2);
+    await db.instrument.create({ data: { exchange: "NSE", symbol: "NEWCO", name: "New Company Limited", inUniverse: true } });
+    expect(await matchStoredAnnouncements(db)).toEqual({ matched: 1, unmatched: 0, ambiguous: 1 });
+  });
+  it("matches only active universe equities from NSE announcement feeds, across batches", async () => {
+    await seedStarterUniverse(db);
+    await db.instrument.update({ where: { exchange_symbol: { exchange: "NSE", symbol: "INFY" } }, data: { active: false } });
+    await db.instrument.update({ where: { exchange_symbol: { exchange: "NSE", symbol: "HDFCBANK" } }, data: { inUniverse: false } });
+    await storeAnnouncements(db, Array.from({ length: 103 }, (_, i) => ({ sourceId: `batch-${i}`, title: "TCS - Update", url: `https://example.com/${i}`, description: null, publishedAt: null })));
+    await storeAnnouncements(db, ["INFY", "HDFCBANK"].map((symbol) => ({ sourceId: symbol, title: `${symbol} - Update`, url: `https://example.com/${symbol}`, description: null, publishedAt: null })));
+    await db.feedItem.create({ data: { source: "other", sourceId: "other", title: "TCS - Update", url: "https://example.com/other" } });
+    expect(await matchStoredAnnouncements(db)).toEqual({ matched: 103, unmatched: 2, ambiguous: 0 });
+    expect((await db.feedItem.findFirstOrThrow({ where: { source: "other" } })).matchStatus).toBe("pending");
+    expect(await db.feedItem.count({ where: { source: NSE_SOURCE } })).toBe(105);
+  });
+  it("requires a universe and enforces consistent match state in the database", async () => {
+    await expect(matchStoredAnnouncements(db)).rejects.toThrow("No active NSE stocks");
+    await expect(db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "invalid", title: "Results", url: "https://example.com", matchStatus: "matched" } })).rejects.toThrow();
+  });
   it("stores unmatched announcements and deduplicates concurrent ingestion without changing discovery time", async () => {
     const item = { sourceId: "filing-1", title: "Example results", url: "https://example.com/1", description: null, publishedAt: null };
     const results = await Promise.all([storeAnnouncements(db, [item, item]), storeAnnouncements(db, [item])]);

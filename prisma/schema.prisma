@@ -74,19 +74,33 @@ enum SignalOrigin {
   @@map("signal_origin")
 }
 
-// Raw inbox: preserve announcements even before company matching is implemented.
+enum FeedMatchStatus {
+  pending
+  matched
+  unmatched
+  ambiguous
+
+  @@map("feed_match_status")
+}
+
+// Raw inbox: retain source items independently of successful company matching.
 model FeedItem {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source       String
-  sourceId     String   @map("source_id")
-  title        String
-  url          String
-  description  String?
-  publishedAt  DateTime? @map("published_at") @db.Timestamptz(6)
-  discoveredAt DateTime @default(now()) @map("discovered_at") @db.Timestamptz(6)
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source         String
+  sourceId       String          @map("source_id")
+  title          String
+  url            String
+  description    String?
+  publishedAt    DateTime?        @map("published_at") @db.Timestamptz(6)
+  discoveredAt   DateTime         @default(now()) @map("discovered_at") @db.Timestamptz(6)
+  matchStatus    FeedMatchStatus @default(pending) @map("match_status")
+  matchCheckedAt DateTime?        @map("match_checked_at") @db.Timestamptz(6)
+  instrumentId   String?          @map("instrument_id") @db.Uuid
+  instrument     Instrument?     @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
 
   @@unique([source, sourceId], map: "feed_items_source_unique")
   @@index([discoveredAt], map: "feed_items_discovered_idx")
+  @@index([instrumentId], map: "feed_items_instrument_idx")
   @@map("feed_items")
 }
 
@@ -108,6 +122,7 @@ model Instrument {
   updatedAt     DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   announcements            Announcement[]       @relation("announcements_instrument_id_instruments_id_fk")
+  feedItems                FeedItem[]
   benchmark                Instrument?          @relation("instruments_benchmark_id_instruments_id_fk", fields: [benchmarkId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_benchmark_id_instruments_id_fk")
   instrumentsAsBenchmark   Instrument[]         @relation("instruments_benchmark_id_instruments_id_fk")
   sectorIndex              Instrument?          @relation("instruments_sector_index_id_instruments_id_fk", fields: [sectorIndexId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_sector_index_id_instruments_id_fk")
