@@ -60,19 +60,26 @@ export async function detectStoredMovement(
   if (decision.status === "skipped") return decision;
   const key = createHash("sha256").update(JSON.stringify([MOVEMENT_VERSION, stock.id, provider, current!.providerSymbol, current!.quoteTime!.toISOString()])).digest("hex");
   const dedupeKey = `movement:${key}`;
-  const created = await db.signal.createMany({ data: [{
-    instrumentId: stock.id, origin: "movement", dedupeKey, detectorVersion: MOVEMENT_VERSION,
-    observedAt: current!.quoteTime!, windowStart: reference!.quoteTime!,
-    price: current!.quotePrice, referencePrice: reference!.quotePrice, priceChangePct: decision.changePct,
-    context: {
-      provider, providerSymbol: current!.providerSymbol, currentSnapshotId: current!.id, referenceSnapshotId: reference!.id,
-      detectedAt: at.toISOString(), currentRetrievedAt: current!.retrievedAt.toISOString(), referenceRetrievedAt: reference!.retrievedAt.toISOString(),
-      direction: decision.direction, thresholdPct: "2", windowSeconds: 300, referenceToleranceSeconds: 60,
-      methodology: "same-provider same-session quote change; no candle baseline",
-      delayStatus: current!.quoteDelayStatus ?? "unknown", sourceQuality: "provider data and delay not independently verified",
-    },
-  }], skipDuplicates: true });
-  const signal = await db.signal.findUniqueOrThrow({ where: { dedupeKey }, select: { id: true, priceChangePct: true } });
-  if (!signal.priceChangePct) throw new MarketDataError("INVALID_STORED_MOVEMENT");
-  return { status: created.count ? "inserted" : "duplicate", signalId: signal.id, changePct: signal.priceChangePct.toFixed(8), direction: signal.priceChangePct.gt(0) ? "up" : "down" };
+  return db.$transaction(async (tx) => {
+    const created = await tx.signal.createMany({ data: [{
+      instrumentId: stock.id, origin: "movement", dedupeKey, detectorVersion: MOVEMENT_VERSION,
+      observedAt: current!.quoteTime!, windowStart: reference!.quoteTime!,
+      price: current!.quotePrice, referencePrice: reference!.quotePrice, priceChangePct: decision.changePct,
+      context: {
+        provider, providerSymbol: current!.providerSymbol, currentSnapshotId: current!.id, referenceSnapshotId: reference!.id,
+        detectedAt: at.toISOString(), currentRetrievedAt: current!.retrievedAt.toISOString(), referenceRetrievedAt: reference!.retrievedAt.toISOString(),
+        direction: decision.direction, thresholdPct: "2", windowSeconds: 300, referenceToleranceSeconds: 60,
+        methodology: "same-provider same-session quote change; no candle baseline",
+        delayStatus: current!.quoteDelayStatus ?? "unknown", sourceQuality: "provider data and delay not independently verified",
+      },
+    }], skipDuplicates: true });
+    const signal = await tx.signal.findUniqueOrThrow({ where: { dedupeKey }, select: { id: true, priceChangePct: true } });
+    if (!signal.priceChangePct) throw new MarketDataError("INVALID_STORED_MOVEMENT");
+    // Persist the signal and its evidence-linking work together; no AI is implicit.
+    await tx.job.createMany({ data: [{ kind: "movements.research", dedupeKey: `movement-evidence:${signal.id}`, signalId: signal.id,
+      payload: { signalId: signal.id, analyze: false } }], skipDuplicates: true });
+    const status: "inserted" | "duplicate" = created.count ? "inserted" : "duplicate";
+    const direction: "up" | "down" = signal.priceChangePct.gt(0) ? "up" : "down";
+    return { status, signalId: signal.id, changePct: signal.priceChangePct.toFixed(8), direction };
+  });
 }

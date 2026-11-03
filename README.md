@@ -241,8 +241,9 @@ npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
 
 Supported kinds are `database.check`, `announcements.fetch`,
 `announcements.match`, `announcements.filter`, `announcements.analyze`, and
-`announcements.pipeline`. Payloads must be empty except analysis `limit` or
-pipeline `analyze`/`analysisLimit`, described below. Use a unique dedupe key for a new operation. Reusing a key with
+`announcements.pipeline`, and `movements.research`. Payloads must be empty except
+analysis `limit`, pipeline `analyze`/`analysisLimit`, or movement `signalId` and
+optional `analyze`, described below. Use a unique dedupe key for a new operation. Reusing a key with
 the same kind, payload and attempt limit returns the existing job, including a
 completed or failed job; it does not reset it. Conflicting reuse is rejected.
 Inspect jobs using `npm run db:studio`; worker logs include job ID, status,
@@ -456,10 +457,62 @@ persisted assessment, not a replacement calculation. There is no cooldown across
 different quote timestamps yet.
 
 The command reads the database only for prices: it does not fetch quotes, invoke
-AI, create jobs or deliver notifications. Announcement/evidence matching and
-research integration are separate work. Unknown calendar coverage is a failing
+AI or deliver notifications. It atomically enqueues one deduplicated evidence-
+linking job with the signal, as described below. Unknown calendar coverage is a failing
 CLI check; other skipped cases are normal explicit outcomes. Live market-data
 suitability and calendar configuration remain required for operational use.
+
+### Movement evidence and research
+
+Movement detection now saves an associated `movements.research` job atomically
+with its signal. The worker links context without calling AI by default. It does
+not enqueue repeated jobs for repeated detection of the same source event. A
+completed linking job is not automatically replayed when a later filing arrives;
+rerun the command below or enqueue an explicit new job to refresh context.
+
+```sh
+# Attach available evidence only; no provider key required:
+npm run movements:research -- SIGNAL_UUID
+# Explicit Gemini research (uses quota and requires configured access):
+npm run movements:research -- SIGNAL_UUID --analyze
+# Or use the durable queue:
+npm run jobs:enqueue -- movements.research manual-movement-1 '{"signalId":"SIGNAL_UUID","analyze":true}'
+```
+
+The source quote snapshots must exist and match the signal's instrument, prices,
+provider and timestamps. Filings must be matched to the same stock, have a
+current-rule `keep`/`review` decision, have a known publication time, and have
+been discovered by the requested research time. The association window runs from
+24 hours before the observed move through at most 30 minutes after it, bounded
+by research time. The latest five distinct filing URLs are selected from up to
+thirty candidates. Other stocks, routine filings, unknown publication dates and
+out-of-window filings stay in the inbox but are not attached as timed evidence.
+This stage uses the existing announcement RSS source, not a new external news
+search or full-filing fetcher.
+
+Evidence links are deduplicated by signal/URL. Announcements published after the
+move are labeled as such. A `knownAtMove` flag separately distinguishes filings
+this system discovered only after the move, even if published earlier. A time association never establishes causality:
+`catalystVerified` stays false and no verified catalyst is filled in. When there
+is no eligible announcement, the input contains just the observed movement and
+research must leave the catalyst unknown; this does not prove no catalyst exists.
+
+Optional AI input includes exact stored prices, source times/IDs, quote age at
+research time, provider delay uncertainty, and bounded untrusted filing text.
+It cites only server-supplied evidence IDs and must cite the movement itself.
+Malformed classifications/citations are rejected. Structured output validation
+does not verify the factual accuracy of generated prose. The saved `analyses`
+record includes input snapshot/hash, provider/model/prompt version, research
+priority, uncertainties and evidence context. No alerts, trades or delivery
+records are created.
+
+Identical evidence and movement inputs reuse completed research even as wall
+clock age increases. New evidence or model/prompt changes can produce a new
+analysis while preserving earlier versions. The generalized Gemini prompt uses
+announcement prompt version v2 so prior v1 records remain historical. Failures
+stay retryable without a fake successful analysis; unsupported/missing movement
+sources fail the queued task explicitly. Source context is rechecked before
+saving output. No automatic price polling or scheduled AI budget is added here.
 
 ## Operational checks and restart recovery
 

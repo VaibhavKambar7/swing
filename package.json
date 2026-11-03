@@ -30,7 +30,8 @@
     "jobs:status": "tsx scripts/check-jobs.ts",
     "prices:check": "node --use-env-proxy --import tsx scripts/check-prices.ts",
     "prices:import": "node --use-env-proxy --import tsx scripts/import-prices.ts",
-    "prices:detect": "tsx scripts/detect-movements.ts"
+    "prices:detect": "tsx scripts/detect-movements.ts",
+    "movements:research": "node --use-env-proxy --import tsx scripts/research-movement.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

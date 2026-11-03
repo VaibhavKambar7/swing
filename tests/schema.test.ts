@@ -23,6 +23,7 @@ import { storeMarketSnapshot, importMarketSnapshot } from "../src/lib/market-dat
 import { syntheticSnapshot } from "./fixtures/market-snapshot";
 import type { MarketDataProvider } from "../src/lib/market-data/provider";
 import { detectStoredMovement, MOVEMENT_VERSION } from "../src/lib/market-data/detect";
+import { researchMovement } from "../src/lib/research/movement";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -90,6 +91,79 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  async function linkedMovement() {
+    await movementQuotes();
+    const result = await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date("2026-11-03T04:30:00Z"));
+    if (!("signalId" in result)) throw new Error("Expected movement fixture");
+    return result.signalId;
+  }
+  async function evidenceRows() {
+    await db.feedItem.createMany({ data: [
+      ["before", "TCS - Results", "2026-11-03T04:20:00Z", "2026-11-03T04:21:00Z"],
+      ["after", "TCS - Acquisition", "2026-11-03T04:40:00Z", "2026-11-03T04:41:00Z"],
+      ["late", "TCS - Results", "2026-11-03T05:01:00Z", "2026-11-03T05:02:00Z"],
+      ["old", "TCS - Results", "2026-11-02T04:29:00Z", "2026-11-02T04:29:00Z"],
+      ["unknown-date", "TCS - Update", null, "2026-11-03T04:20:00Z"],
+      ["routine", "TCS - Trading Window Closure", "2026-11-03T04:20:00Z", "2026-11-03T04:21:00Z"],
+      ["other-stock", "INFY - Results", "2026-11-03T04:20:00Z", "2026-11-03T04:21:00Z"],
+      ["not-yet-found", "TCS - Results", "2026-11-03T04:20:00Z", "2026-11-03T06:00:00Z"],
+    ].map(([sourceId, title, publishedAt, discoveredAt]) => ({ source: NSE_SOURCE, sourceId: sourceId!, title: title!, url: `https://example.com/${sourceId}`, publishedAt: publishedAt ? new Date(publishedAt) : null, discoveredAt: new Date(discoveredAt!) })) });
+    await matchStoredAnnouncements(db); await filterStoredAnnouncements(db);
+  }
+  function movementProvider() {
+    return { name: "test", model: "movement-test", analyze: vi.fn<ResearchProvider["analyze"]>().mockImplementation(async (input) => {
+      if (!("movement" in input)) throw new Error("Expected movement context");
+      return { assessment: { classification: "INVESTIGATE", summary: "Observed price movement; catalyst not established.", significance: "Investigate the provided evidence.",
+        risks: ["Unverified source timing and price data."], uncertainties: ["A nearby disclosure does not establish cause."], evidenceIds: input.evidence.map((entry) => entry.id) }, inputTokens: 120, outputTokens: 80 };
+    }) } satisfies ResearchProvider;
+  }
+  it("links only same-stock, timed, relevant announcements and deduplicates evidence", async () => {
+    const id = await linkedMovement(); await evidenceRows();
+    const at = new Date("2026-11-03T05:00:00Z");
+    expect(await researchMovement(db, id, undefined, at)).toMatchObject({ status: "linked", evidenceCount: 2, evidenceInserted: 2, catalystVerified: false });
+    const links = await db.signalEvidence.findMany({ orderBy: { url: "asc" } });
+    expect(links.map((entry) => entry.url)).toEqual(["https://example.com/after", "https://example.com/before"]);
+    expect(await researchMovement(db, id, undefined, at)).toMatchObject({ evidenceInserted: 0 });
+    expect(await db.analysis.count()).toBe(0);
+  });
+  it("persists movement research with timing labels, source IDs and no verified catalyst", async () => {
+    const id = await linkedMovement(); await evidenceRows(); const provider = movementProvider();
+    expect(await researchMovement(db, id, provider, new Date("2026-11-03T05:00:00Z"))).toMatchObject({ status: "analyzed", evidenceCount: 2, catalystVerified: false });
+    expect(await researchMovement(db, id, provider, new Date("2026-11-03T05:01:00Z"))).toMatchObject({ status: "duplicate" });
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    const input = provider.analyze.mock.calls[0][0];
+    if (!("movement" in input)) throw new Error("Expected movement input");
+    expect(input.movement).toMatchObject({ signalId: id, source: "yahoo-experimental", delayStatus: "unknown" });
+    expect(input.evidence.map((entry) => entry.timing)).toContain("published_after_move");
+    expect(input.evidence.find((entry) => entry.url === "https://example.com/before")?.knownAtMove).toBe(true);
+    expect(input.evidence.find((entry) => entry.url === "https://example.com/after")?.knownAtMove).toBe(false);
+    const stored = await db.analysis.findFirstOrThrow();
+    expect(stored).toMatchObject({ signalId: id, catalyst: null, catalystVerified: false, inputHash: expect.any(String), assessment: { classification: "INVESTIGATE" } });
+  });
+  it("supports an unknown catalyst without inventing announcement citations and updates when evidence arrives", async () => {
+    const id = await linkedMovement(); const provider = movementProvider();
+    expect(await researchMovement(db, id, provider, new Date("2026-11-03T04:31:00Z"))).toMatchObject({ evidenceCount: 0 });
+    const first = provider.analyze.mock.calls[0][0];
+    expect("evidence" in first && first.evidence.map((entry) => entry.id)).toEqual(["movement"]);
+    await evidenceRows();
+    expect(await researchMovement(db, id, provider, new Date("2026-11-03T05:00:00Z"))).toMatchObject({ status: "analyzed", evidenceCount: 2 });
+    expect(await db.analysis.count()).toBe(2);
+    expect(await db.signalEvidence.count()).toBe(2);
+  });
+  it("rejects fabricated evidence IDs and source mismatch without saving model output", async () => {
+    const id = await linkedMovement(); const provider = movementProvider();
+    provider.analyze.mockResolvedValue({ assessment: { classification: "WATCH", summary: "Test", significance: "Test", risks: ["Unknown"], uncertainties: ["Unknown"], evidenceIds: ["fabricated"] }, inputTokens: 1, outputTokens: 1 });
+    await expect(researchMovement(db, id, provider, new Date("2026-11-03T05:00:00Z"))).rejects.toThrow("invalid_movement_research");
+    expect(await db.analysis.count()).toBe(0);
+    await db.signal.update({ where: { id }, data: { context: {} } });
+    await expect(researchMovement(db, id, undefined, new Date("2026-11-03T05:00:00Z"))).rejects.toThrow("movement_sources_missing");
+  });
+  it("runs the automatically queued movement linker without an AI call", async () => {
+    const id = await linkedMovement();
+    expect(await runJobOnce(db, "movement-worker", createJobHandlers(db))).toMatchObject({ status: "succeeded", kind: "movements.research" });
+    expect((await db.job.findFirstOrThrow()).signalId).toBe(id);
+    expect(await db.analysis.count()).toBe(0);
+  });
   const movementCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-03", coverageEnd: "2026-11-03", holidays: [], specialSessions: [] });
   async function movementQuotes() {
     await seedStarterUniverse(db);
@@ -114,7 +188,8 @@ describe("Prisma migration and research data", () => {
     expect(signal.price?.toFixed(18)).toBe(current.quote!.price);
     expect(signal.referencePrice?.toString()).toBe("100");
     expect(signal.priceChangePct?.toFixed(8)).toBe("3.12345679");
-    expect(await db.job.count()).toBe(0);
+    expect(await db.job.count()).toBe(1);
+    expect(await db.job.findFirstOrThrow()).toMatchObject({ kind: "movements.research", signalId: signal.id, payload: { signalId: signal.id, analyze: false } });
     const repeated = { ...current, retrievedAt: "2026-11-03T04:31:00.000Z", quote: { ...current.quote!, retrievedAt: "2026-11-03T04:31:00.000Z", ageSeconds: 60 } };
     await storeMarketSnapshot(db, repeated);
     expect(await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date(repeated.retrievedAt))).toMatchObject({ status: "duplicate" });

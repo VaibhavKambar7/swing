@@ -1,15 +1,18 @@
 import { z } from "zod";
 
-export const RESEARCH_PROMPT_VERSION = "announcement-research-v1";
+export const RESEARCH_PROMPT_VERSION = "announcement-research-v2";
 const sentence = z.string().trim().min(1).max(2000);
-export const researchSchema = z.object({
-  classification: z.enum(["INVESTIGATE", "WATCH", "IGNORE"]),
-  summary: sentence,
-  significance: sentence,
-  risks: z.array(sentence).min(1).max(6),
-  uncertainties: z.array(sentence).min(1).max(6),
-  evidenceIds: z.array(z.literal("announcement")).length(1),
-}).strict();
+export function researchSchemaFor(ids: string[], requiredId?: string) {
+  return z.object({
+    classification: z.enum(["INVESTIGATE", "WATCH", "IGNORE"]),
+    summary: sentence,
+    significance: sentence,
+    risks: z.array(sentence).min(1).max(6),
+    uncertainties: z.array(sentence).min(1).max(6),
+    evidenceIds: z.array(z.string()).min(1).max(6).refine((values) => new Set(values).size === values.length && values.every((id) => ids.includes(id)) && (!requiredId || values.includes(requiredId))),
+  }).strict();
+}
+export const researchSchema = researchSchemaFor(["announcement"]);
 export type ResearchAssessment = z.infer<typeof researchSchema>;
 
 export type ResearchInput = {
@@ -23,10 +26,17 @@ export type ResearchResult = {
   inputTokens: number | null;
   outputTokens: number | null;
 };
+export type MovementResearchInput = {
+  stock: { exchange: string; symbol: string; name: string };
+  movement: { signalId: string; observedAt: string; referenceAt: string; price: string; referencePrice: string; changePct: string; priceAgeAtResearchSeconds: number; source: string; providerSymbol: string; delayStatus: string; sourceSnapshotIds: string[] };
+  evidence: { id: string; kind: "market_observation" | "official_announcement"; title: string; url: string | null; description: string | null; publishedAt: string | null; discoveredAt: string | null; timing: string; knownAtMove: boolean | null }[];
+  researchedAt: string;
+  contentTruncated: boolean;
+};
 export type ResearchProvider = {
   name: string;
   model: string;
-  analyze(input: ResearchInput): Promise<ResearchResult>;
+  analyze(input: ResearchInput | MovementResearchInput): Promise<ResearchResult>;
 };
 
 export class ResearchError extends Error {

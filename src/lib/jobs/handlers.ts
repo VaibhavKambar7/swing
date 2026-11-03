@@ -10,15 +10,17 @@ import { ResearchError } from "../research/schema";
 import { JobError } from "./queue";
 import type { JobHandler, JobHandlers } from "./runner";
 import { createPipelineStages, runAnnouncementPipeline, type PipelineStages } from "./pipeline";
+import { researchMovement } from "../research/movement";
 
-export const JOB_KINDS = ["database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline"] as const;
+export const JOB_KINDS = ["database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research"] as const;
 const emptyPayload = z.object({}).strict();
 const analysisPayload = z.object({ limit: z.number().int().min(1).max(20).default(1) }).strict();
 const pipelinePayload = z.object({ analyze: z.boolean().default(false), analysisLimit: z.number().int().min(1).max(20).default(1) }).strict();
+const movementPayload = z.object({ signalId: z.string().uuid(), analyze: z.boolean().default(false) }).strict();
 
 export function validateJobPayload(kind: string, payload: unknown) {
   if (!(JOB_KINDS as readonly string[]).includes(kind)) throw new JobError("UNSUPPORTED_JOB_KIND", true);
-  const result = (kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
+  const result = (kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
   if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
   return result.data;
 }
@@ -37,6 +39,19 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     signal.throwIfAborted();
   };
   return {
+    "movements.research": async (job, signal) => {
+      const result = movementPayload.safeParse(job.payload);
+      if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
+      signal.throwIfAborted();
+      try {
+        await researchMovement(db, result.data.signalId, result.data.analyze ? createGeminiProvider() : undefined);
+      } catch (error) {
+        if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
+        if (error instanceof ResearchError && ["movement_unavailable", "movement_sources_missing", "movement_sources_mismatch", "invalid_movement_request"].includes(error.code)) throw new JobError("MOVEMENT_CONTEXT_UNAVAILABLE", true);
+        throw error;
+      }
+      signal.throwIfAborted();
+    },
     "announcements.pipeline": async (job, signal) => {
       // Validate before any network or database side effects.
       const result = pipelinePayload.safeParse(job.payload);

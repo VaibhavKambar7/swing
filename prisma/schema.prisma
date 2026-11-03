@@ -301,6 +301,8 @@ model Analysis {
   provider         String
   model            String
   promptVersion    String   @map("prompt_version")
+  inputHash        String?  @map("input_hash")
+  inputSnapshot    Json?    @map("input_snapshot") @db.JsonB
   summary          String
   catalyst         String?
   catalystVerified Boolean  @default(false) @map("catalyst_verified")
@@ -316,6 +318,7 @@ model Analysis {
   signal Signal  @relation("analyses_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "analyses_signal_id_signals_id_fk")
 
   @@unique([id, signalId], map: "analyses_id_signal_unique")
+  @@unique([signalId, provider, model, promptVersion, inputHash], map: "analyses_input_unique")
   @@index([signalId, createdAt], map: "analyses_signal_created_idx")
   @@map("analyses")
 }

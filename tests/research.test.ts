@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGeminiProvider } from "../src/lib/research/gemini";
 import { buildResearchInput } from "../src/lib/research/analyze";
-import { parseResearchLimit, researchSchema, type ResearchInput } from "../src/lib/research/schema";
+import { parseResearchLimit, researchSchema, researchSchemaFor, type ResearchInput, type MovementResearchInput } from "../src/lib/research/schema";
 
 const input: ResearchInput = {
   stock: { exchange: "NSE", symbol: "EXAMPLE", name: "Example Limited" },
@@ -19,6 +19,21 @@ function response(output: unknown = assessment, finishReason = "STOP") {
 }
 
 describe("structured announcement research", () => {
+  it("validates dynamic movement citations and requires the observed movement", async () => {
+    expect(researchSchemaFor(["movement", "announcement:one"], "movement").safeParse({ ...assessment, evidenceIds: ["announcement:one"] }).success).toBe(false);
+    expect(researchSchemaFor(["movement"], "movement").safeParse({ ...assessment, evidenceIds: ["movement", "movement"] }).success).toBe(false);
+    const movementInput: MovementResearchInput = {
+      stock: input.stock, movement: { signalId: "test", observedAt: input.announcement.discoveredAt, referenceAt: input.announcement.discoveredAt,
+        price: "103", referencePrice: "100", changePct: "3", priceAgeAtResearchSeconds: 600, source: "test", providerSymbol: "EXAMPLE.NS", delayStatus: "unknown", sourceSnapshotIds: [] },
+      evidence: [{ id: "movement", kind: "market_observation", title: "Observed movement", url: null, description: null, publishedAt: null, discoveredAt: null, timing: "observed_price_event", knownAtMove: null }],
+      researchedAt: input.announcement.discoveredAt, contentTruncated: false,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ ...assessment, evidenceIds: ["movement"] }));
+    expect((await createGeminiProvider({ GEMINI_API_KEY: "secret" }, fetcher).analyze(movementInput)).assessment.evidenceIds).toEqual(["movement"]);
+    const payload = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(payload.systemInstruction.parts[0].text).toContain("never proof");
+    expect(payload.generationConfig.responseSchema.properties.evidenceIds.items.enum).toEqual(["movement"]);
+  });
   it("requires a configured key without exposing credentials", () => {
     expect(() => createGeminiProvider({})).toThrow("missing_gemini_api_key");
     expect(() => createGeminiProvider({ GEMINI_API_KEY: "secret", GEMINI_MODEL: "../invalid" })).toThrow("invalid_gemini_model");
