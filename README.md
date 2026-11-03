@@ -376,8 +376,49 @@ redirect following, and a 2 MB response limit. Cloud network settings must allow
 `query1.finance.yahoo.com`. HTTP failures/rate limits and invalid data produce safe
 error codes without raw response bodies. Fixtures test normalization and transport
 behavior only; there is no runtime fixture fallback. Checks do not write prices
-to the database, create signals, call AI or schedule polling. Persistence,
-movement detection and pipeline integration are subsequent steps.
+to the database, create signals, call AI or schedule polling. Use the separate
+import command below for persistence; movement detection and automatic price
+polling are subsequent steps.
+
+### Persisting market observations
+
+```sh
+npm run db:migrate
+npm run universe:seed
+npm run prices:import -- TCS --days 30
+```
+
+Imports require an existing active NSE equity with `inUniverse = true`; unknown
+or disabled stocks are rejected before fetching. The response's stock, provider
+and requested range must match the request. Quotes and daily bars are validated
+again at the storage boundary, then saved atomically in `market_snapshots` and
+`market_candles`. Inspect them using `npm run db:studio`. A failed fetch or
+invalid snapshot does not insert a successful observation.
+
+Snapshots are immutable retrievals. A hash of the normalized snapshot (including
+retrieval time) deduplicates identical reimports, including concurrent writes.
+A later retrieval is a new observation even when the source quote hasn't moved.
+Revised candle values remain alongside earlier observations rather than silently
+overwriting history. This initial design stores the returned candle window for
+each retrieval; it prioritizes a clear audit trail over compact revision storage.
+Order observations by `retrievedAt`, then `recordedAt`/ID for ties, rather than
+assuming the most recently inserted row has the newest source data.
+
+Prices use PostgreSQL `numeric(38,18)` and volumes use nullable `bigint`. Values
+that would round, overflow or violate OHLC bounds are rejected before insertion.
+Decimal strings are normalized without converting through JavaScript numbers.
+This preserves the adapter's supplied precision, not precision already lost by
+the provider's JSON numeric representation. Missing quotes/volumes/adjusted
+closes remain null. Candle session dates use IST; timestamps use UTC instants.
+Incomplete/unknown bars are never marked final, and provider-native price basis
+remains unverified.
+
+Quote age and freshness are checked against retrieval time before storage.
+`quoteFreshness` is a historical label **at retrieval**, not a promise that the
+stored quote is fresh now; consumers must recompute age from `quoteTime` before
+using it. No movement signal, model call, scheduled price job or trading action
+is created by importing observations. Live Yahoo access is still a separate
+environment/provider verification requirement.
 
 ## Operational checks and restart recovery
 

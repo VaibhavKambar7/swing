@@ -170,11 +170,57 @@ model Instrument {
   instrumentsAsSectorIndex Instrument[]         @relation("instruments_sector_index_id_instruments_id_fk")
   performanceOutcomes      PerformanceOutcome[] @relation("performance_outcomes_benchmark_id_instruments_id_fk")
   signals                  Signal[]             @relation("signals_instrument_id_instruments_id_fk")
+  marketSnapshots          MarketSnapshotRecord[]
 
   @@unique([exchange, symbol], map: "instruments_exchange_symbol_unique")
   @@unique([kiteToken], map: "instruments_kite_token_unique")
   @@index([inUniverse, active], map: "instruments_universe_idx")
   @@map("instruments")
+}
+
+// Immutable retrievals preserve changing bars without overwriting earlier data.
+model MarketSnapshotRecord {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  instrumentId     String    @map("instrument_id") @db.Uuid
+  provider         String
+  providerSymbol   String    @map("provider_symbol")
+  contentHash      String    @map("content_hash")
+  retrievedAt      DateTime  @map("retrieved_at") @db.Timestamptz(6)
+  requestedDays    Int       @map("requested_days")
+  skippedBars      Int       @map("skipped_bars")
+  quotePrice       Decimal?  @map("quote_price") @db.Decimal(38, 18)
+  quoteTime        DateTime? @map("quote_time") @db.Timestamptz(6)
+  quoteAgeSeconds  Decimal?  @map("quote_age_seconds") @db.Decimal(20, 3)
+  quoteFreshness   String?   @map("quote_freshness")
+  quoteDelayStatus String?   @map("quote_delay_status")
+  currency         String    @default("INR")
+  recordedAt       DateTime  @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  instrument       Instrument @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "market_snapshots_instrument_fk")
+  candles          MarketCandleRecord[]
+
+  @@unique([instrumentId, provider, contentHash], map: "market_snapshots_content_unique")
+  @@index([instrumentId, provider, retrievedAt], map: "market_snapshots_observed_idx")
+  @@map("market_snapshots")
+}
+
+model MarketCandleRecord {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  snapshotId    String   @map("snapshot_id") @db.Uuid
+  sessionDate   DateTime @map("session_date") @db.Date
+  sourceTime    DateTime @map("source_time") @db.Timestamptz(6)
+  open          Decimal  @db.Decimal(38, 18)
+  high          Decimal  @db.Decimal(38, 18)
+  low           Decimal  @db.Decimal(38, 18)
+  close         Decimal  @db.Decimal(38, 18)
+  volume        BigInt?
+  adjustedClose Decimal? @map("adjusted_close") @db.Decimal(38, 18)
+  priceBasis    String   @map("price_basis")
+  completion    String
+  snapshot      MarketSnapshotRecord @relation(fields: [snapshotId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "market_candles_snapshot_fk")
+
+  @@unique([snapshotId, sessionDate], map: "market_candles_snapshot_session_unique")
+  @@index([sessionDate], map: "market_candles_session_idx")
+  @@map("market_candles")
 }
 
 model Announcement {

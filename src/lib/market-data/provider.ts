@@ -34,3 +34,13 @@ export function nseProviderSymbol(instrument: MarketInstrument) {
 export function validateHistoryDays(days: number) {
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new MarketDataError("INVALID_HISTORY_DAYS");
 }
+
+export function parsePriceArgs(args: string[]) {
+  const [symbol, flag, value, ...extra] = args;
+  if (!symbol || extra.length || (flag !== undefined && (flag !== "--days" || !value || !/^\d+$/.test(value)))) throw new MarketDataError("INVALID_ARGUMENTS");
+  const days = value === undefined ? 30 : Number(value);
+  validateHistoryDays(days);
+  const instrument: MarketInstrument = { exchange: "NSE", symbol: symbol.trim().toUpperCase() };
+  nseProviderSymbol(instrument);
+  return { instrument, days };
+}

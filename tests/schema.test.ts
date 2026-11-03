@@ -19,6 +19,9 @@ import { parseCalendar } from "../src/lib/market/calendar";
 import { scheduleAnnouncementRun } from "../src/lib/market/scheduler";
 import { createPipelineStages } from "../src/lib/jobs/pipeline";
 import { getJobStatus } from "../src/lib/jobs/status";
+import { storeMarketSnapshot, importMarketSnapshot } from "../src/lib/market-data/persist";
+import { syntheticSnapshot } from "./fixtures/market-snapshot";
+import type { MarketDataProvider } from "../src/lib/market-data/provider";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -86,6 +89,67 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("stores precise quotes/candles once under concurrent repeat imports", async () => {
+    await seedStarterUniverse(db);
+    const snapshot = syntheticSnapshot();
+    const results = await Promise.all([storeMarketSnapshot(db, snapshot), storeMarketSnapshot(db, snapshot)]);
+    expect(results.filter((result) => result.inserted)).toHaveLength(1);
+    expect(results[0].snapshotId).toBe(results[1].snapshotId);
+    expect(await db.marketSnapshotRecord.count()).toBe(1);
+    expect(await db.marketCandleRecord.count()).toBe(1);
+    const stored = await db.marketSnapshotRecord.findFirstOrThrow({ include: { candles: true } });
+    expect(stored.quotePrice?.toFixed(18)).toBe(snapshot.quote!.price);
+    expect(stored.quoteAgeSeconds?.toNumber()).toBe(60);
+    expect(stored).toMatchObject({ quoteFreshness: "recent", quoteDelayStatus: "unknown", currency: "INR" });
+    expect(stored.candles[0]).toMatchObject({ volume: null, adjustedClose: null, completion: "unknown", priceBasis: "provider_native_unverified" });
+    const repeated = await storeMarketSnapshot(db, snapshot);
+    expect(repeated).toMatchObject({ inserted: false, candlesInserted: 0 });
+    expect((await db.marketSnapshotRecord.findFirstOrThrow()).recordedAt).toEqual(stored.recordedAt);
+  });
+  it("preserves revised candles and orders observations by retrieval rather than import time", async () => {
+    await seedStarterUniverse(db);
+    const earlier = syntheticSnapshot(), later = syntheticSnapshot();
+    later.retrievedAt = "2026-11-03T04:40:00.000Z";
+    later.quote!.retrievedAt = later.retrievedAt; later.quote!.ageSeconds = 660; later.quote!.freshness = "stale";
+    later.candles[0].close = "101";
+    const newest = await storeMarketSnapshot(db, later);
+    await storeMarketSnapshot(db, earlier);
+    expect(await db.marketCandleRecord.count()).toBe(2);
+    const latest = await db.marketSnapshotRecord.findFirstOrThrow({ orderBy: { retrievedAt: "desc" }, include: { candles: true } });
+    expect(latest.id).toBe(newest.snapshotId);
+    expect(latest.quoteFreshness).toBe("stale");
+    expect(latest.candles[0].close.toString()).toBe("101");
+    expect(await db.marketSnapshotRecord.count()).toBe(2);
+  });
+  it("stores missing quotes explicitly and rejects invalid imports without partial records", async () => {
+    await seedStarterUniverse(db);
+    const bad = syntheticSnapshot(); bad.candles[0].close = "100.1234567890123456789";
+    await expect(storeMarketSnapshot(db, bad)).rejects.toThrow("PRICE_PRECISION_UNSUPPORTED");
+    expect(await db.marketSnapshotRecord.count()).toBe(0);
+    expect(await db.marketCandleRecord.count()).toBe(0);
+    const historyOnly = syntheticSnapshot(); historyOnly.quote = null;
+    expect(await storeMarketSnapshot(db, historyOnly)).toMatchObject({ inserted: true, quoteStored: false });
+    expect(await db.marketSnapshotRecord.findFirstOrThrow()).toMatchObject({ quotePrice: null, quoteTime: null, quoteAgeSeconds: null, quoteFreshness: null, quoteDelayStatus: null });
+  });
+  it("requires an active configured stock before fetching and verifies returned provider identity", async () => {
+    const provider = { name: "yahoo-experimental", getSnapshot: vi.fn<MarketDataProvider["getSnapshot"]>().mockResolvedValue(syntheticSnapshot()) };
+    await expect(importMarketSnapshot(db, provider, { exchange: "NSE", symbol: "TCS" })).rejects.toThrow("INSTRUMENT_NOT_IN_UNIVERSE");
+    expect(provider.getSnapshot).not.toHaveBeenCalled();
+    await seedStarterUniverse(db);
+    const wrong = syntheticSnapshot(); wrong.instrument.symbol = "INFY";
+    provider.getSnapshot.mockResolvedValueOnce(wrong);
+    await expect(importMarketSnapshot(db, provider, { exchange: "NSE", symbol: "TCS" })).rejects.toThrow("PROVIDER_SNAPSHOT_MISMATCH");
+    expect(await db.marketSnapshotRecord.count()).toBe(0);
+    expect(await importMarketSnapshot(db, provider, { exchange: "NSE", symbol: " tcs " })).toMatchObject({ inserted: true, candlesInserted: 1 });
+  });
+  it("enforces complete quote metadata and valid candle prices in SQL", async () => {
+    await seedStarterUniverse(db);
+    const result = await storeMarketSnapshot(db, syntheticSnapshot());
+    await expect(db.marketSnapshotRecord.update({ where: { id: result.snapshotId }, data: { quoteFreshness: "stale" } })).rejects.toThrow();
+    const candle = await db.marketCandleRecord.findFirstOrThrow();
+    await expect(db.marketCandleRecord.update({ where: { id: candle.id }, data: { low: "200" } })).rejects.toThrow();
+    expect((await db.marketCandleRecord.findFirstOrThrow()).low.toString()).toBe("98");
+  });
   it("reports queue failures, due work and expired leases without sensitive fields or mutations", async () => {
     await db.job.createMany({ data: [
       { kind: "secret-kind", dedupeKey: "secret-key", payload: { credential: "secret-value" }, status: "failed", completedAt: new Date(), lastErrorCode: "secret-error" },

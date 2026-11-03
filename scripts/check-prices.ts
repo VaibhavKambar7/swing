@@ -1,14 +1,11 @@
 import "../src/lib/config/load-env";
-import { MarketDataError, validateHistoryDays } from "../src/lib/market-data/provider";
+import { MarketDataError, parsePriceArgs } from "../src/lib/market-data/provider";
 import { createYahooProvider } from "../src/lib/market-data/yahoo";
 
 async function main() {
   try {
-    const [symbol, flag, value, ...extra] = process.argv.slice(2);
-    if (!symbol || extra.length || (flag !== undefined && (flag !== "--days" || !value || !/^\d+$/.test(value)))) throw new MarketDataError("INVALID_ARGUMENTS");
-    const days = value === undefined ? 30 : Number(value);
-    validateHistoryDays(days);
-    const snapshot = await createYahooProvider().getSnapshot({ exchange: "NSE", symbol }, days);
+    const { instrument, days } = parsePriceArgs(process.argv.slice(2));
+    const snapshot = await createYahooProvider().getSnapshot(instrument, days);
     console.log(JSON.stringify({ event: "market_data_checked", input: "live", ...snapshot }));
     if (!snapshot.quote) process.exitCode = 1;
   } catch (error) {
