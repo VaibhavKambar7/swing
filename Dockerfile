@@ -30,4 +30,4 @@ COPY --chown=node:node src ./src
 COPY --chown=node:node tsconfig.json ./
 USER node
 EXPOSE 3001
-CMD ["./node_modules/.bin/tsx", "src/workers/index.ts"]
+CMD ["node", "--use-env-proxy", "--import", "tsx", "src/workers/index.ts"]

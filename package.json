@@ -7,8 +7,8 @@
     "build": "prisma generate && next build",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint",
-    "worker:dev": "tsx watch src/workers/index.ts",
-    "worker": "tsx src/workers/index.ts",
+    "worker:dev": "node --use-env-proxy --import tsx --watch src/workers/index.ts",
+    "worker": "node --use-env-proxy --import tsx src/workers/index.ts",
     "typecheck": "prisma generate && next typegen && tsc --noEmit",
     "test": "prisma generate && vitest run",
     "db:check": "tsx scripts/check-db.ts",
@@ -24,7 +24,8 @@
     "announcements:match": "tsx scripts/match-announcements.ts",
     "announcements:filter": "tsx scripts/filter-announcements.ts",
     "announcements:check": "node --use-env-proxy --import tsx scripts/ingest-announcements.ts --dry-run",
-    "announcements:analyze": "node --use-env-proxy --import tsx scripts/analyze-announcements.ts"
+    "announcements:analyze": "node --use-env-proxy --import tsx scripts/analyze-announcements.ts",
+    "jobs:enqueue": "tsx scripts/enqueue-job.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

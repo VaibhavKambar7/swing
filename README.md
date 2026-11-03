@@ -189,8 +189,9 @@ npm run announcements:analyze -- --limit 5
 
 Only matched, active NSE universe equities with a `keep` or `review` decision
 from the current filtering rules are eligible. Routine items, unmatched items,
-and unfiltered items are excluded. Research is manual: ingestion and the worker
-do not invoke a model automatically. The default limit is five provider attempts
+and unfiltered items are excluded. Research runs only through the manual command
+or an explicitly enqueued analysis job; no analysis jobs are scheduled automatically.
+The default limit is five provider attempts
 per invocation, with a maximum of twenty. API use may consume quota or incur
 charges; the provider's plan determines pricing. Model availability depends on
 the account. This implementation does not select a second provider on failure.
@@ -222,6 +223,53 @@ without provider response bodies or credentials. The provider timeout is 60
 seconds; retries and scheduling belong in the later job runner. Missing
 credentials fail explicitly; there is no fabricated or fixture result fallback.
 
+## Database job runner
+
+The persistent worker polls PostgreSQL for jobs; it does not create scheduled
+jobs or chain pipeline stages yet. Run `npm run worker` (or `worker:dev`) and
+enqueue a job explicitly:
+
+```sh
+npm run jobs:enqueue -- database.check manual-db-check-1
+npm run jobs:enqueue -- announcements.match manual-match-1
+npm run jobs:enqueue -- announcements.filter manual-filter-1
+# Explicit AI use; requires the configured provider and may consume API quota:
+npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
+```
+
+Supported kinds are `database.check`, `announcements.fetch`,
+`announcements.match`, `announcements.filter`, and `announcements.analyze`.
+Payloads must be empty except the optional analysis `limit` (default one,
+maximum twenty). Use a unique dedupe key for a new operation. Reusing a key with
+the same kind, payload and attempt limit returns the existing job, including a
+completed or failed job; it does not reset it. Conflicting reuse is rejected.
+Inspect jobs using `npm run db:studio`; worker logs include job ID, status,
+attempt and safe error code without raw payloads or error messages.
+
+Each worker executes one job at a time. PostgreSQL atomically claims due jobs
+with `FOR UPDATE SKIP LOCKED`, so multiple workers can process different jobs.
+Each claim consumes one attempt and gets a unique token and two-minute lease.
+The runner renews that lease every thirty seconds. Completion and renewal require
+the same unexpired token; an old worker cannot acknowledge a reclaimed job.
+Expired work is moved to retry, or failed when its attempt budget is exhausted.
+Recovery runs before each poll. Ordinary failures retry after 5, 10, 20, ...
+seconds, capped at five minutes, up to five total attempts by default. Invalid
+payloads, unsupported kinds, and missing provider configuration fail immediately.
+No schema migration is needed: the runner uses the existing `jobs` table.
+
+`WORKER_JOB_POLL_MS` controls polling (default 2000, range 500–60000). Idle polls
+do not increment attempts. The worker readiness endpoint includes database and
+queue-poll status; an individual failed job does not mean the worker is down.
+Shutdown stops new claims and signals an active handler, with the existing
+eight-second shutdown deadline. Some operations cannot stop midway; if the
+process exits, the lease expires and another worker can recover the job.
+
+Execution is at least once. Lease tokens protect job state, not external side
+effects: interrupted requests or lost leases can overlap with retries. Ingestion
+deduplication and research uniqueness still apply, but provider calls can be
+repeated. The runner never promises exactly-once API calls. Job chaining, market
+calendars, and automatic schedules are separate subsequent steps.
+
 ## Health checks
 
 | Endpoint / command | Meaning |
@@ -229,7 +277,7 @@ credentials fail explicitly; there is no fabricated or fixture result fallback.
 | `GET /api/health/live` on port 3000 | Web process is responding |
 | `GET /api/health/ready` on port 3000 | Database and worker are ready; otherwise HTTP 503 |
 | `GET /health/live` on port 3001 | Worker process is responding |
-| `GET /health/ready` on port 3001 | Worker database heartbeat is healthy and recent |
+| `GET /health/ready` on port 3001 | Database heartbeat is healthy and queue polling works |
 | `npm run db:check` | Verify a real PostgreSQL query through Prisma |
 
 Health endpoints expose component status only, with no credentials. The worker binds to loopback locally; Compose exposes it only inside its network. The web server also binds to loopback by default. Authentication and settings endpoints arrive in subsequent tasks; there are no credential-entry endpoints in this foundation.
@@ -245,6 +293,7 @@ Copy `.env.example` to `.env`; never commit `.env`. Next.js, worker scripts, and
 | `WORKER_PORT` | `3001` |
 | `WORKER_HEALTH_URL` | `http://127.0.0.1:3001`; web uses this to check the worker |
 | `WORKER_HEARTBEAT_MS` | `10000`, permitted range 1000–60000 |
+| `WORKER_JOB_POLL_MS` | `2000`, permitted range 500–60000 |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose database initialization; unused when connecting to an existing database |
 
 For Compose, keep database settings consistent with `DATABASE_URL`. URL-encode special characters in connection-string credentials. The generated Compose URL assumes a URL-safe password; change it to an explicit encoded URL if needed. Changing initialization credentials does not update an existing PostgreSQL volume.
@@ -317,4 +366,7 @@ Foreign keys prevent signals from referencing another stock's announcement and a
 
 When implemented, ingestion must create a signal and its pending job in one transaction; polling checkpoints must advance only after durable ingestion. Recover expired leases and use bounded retries. Telegram timeouts may leave delivery status `unknown`: stored deduplication keys cannot guarantee exactly-once delivery to an external API. Benchmark/sector mappings must be validated against index instruments by the ingestion layer.
 
-The worker currently performs health checks only. Scanner, announcement, analysis, and delivery modules will be added incrementally without moving persistent work into Next.js request handlers. Redis/BullMQ is deferred.
+The worker runs health checks and explicitly queued announcement/research jobs.
+Market calendars, automatic scheduling, job chaining and delivery are separate
+steps; persistent work stays outside Next.js request handlers. Redis/BullMQ is
+deferred.

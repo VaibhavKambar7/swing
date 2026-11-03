@@ -14,6 +14,7 @@ const envSchema = z.object({
     return parsed !== null && ["http:", "https:"].includes(parsed.protocol);
   }).default("http://127.0.0.1:3001"),
   WORKER_HEARTBEAT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
+  WORKER_JOB_POLL_MS: z.coerce.number().int().min(500).max(60000).default(2000),
 });
 
 export type Env = z.infer<typeof envSchema>;

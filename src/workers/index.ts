@@ -1,8 +1,11 @@
 import "../lib/config/load-env";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { getEnv } from "../lib/config/env";
-import { closeDatabase } from "../lib/db";
+import { closeDatabase, getDatabase } from "../lib/db";
 import { checkDatabase } from "../lib/health";
+import { runJobOnce } from "../lib/jobs/runner";
+import { createJobHandlers } from "../lib/jobs/handlers";
 
 const env = getEnv();
 let stopping = false;
@@ -10,6 +13,25 @@ let timer: NodeJS.Timeout | undefined;
 let activeHeartbeat: Promise<void> | undefined;
 let databaseUp = false;
 let lastCheckedAt = 0;
+const workerId = randomUUID();
+const stopJobs = new AbortController();
+let jobTimer: NodeJS.Timeout | undefined;
+let activeJob: Promise<void> | undefined;
+let jobsUp = false;
+
+function scheduleJob() {
+  if (stopping) return;
+  const db = getDatabase();
+  activeJob = runJobOnce(db, workerId, createJobHandlers(db), stopJobs.signal).then((result) => {
+    jobsUp = true;
+    if (result.jobId) log("job_finished", result);
+  }).catch(() => {
+    jobsUp = false;
+    log("job_poll_failed");
+  }).finally(() => {
+    if (!stopping) jobTimer = setTimeout(scheduleJob, env.WORKER_JOB_POLL_MS);
+  });
+}
 
 function log(event: string, details: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ service: "swing-worker", event, at: new Date().toISOString(), ...details }));
@@ -42,10 +64,10 @@ const server = createServer((request, response) => {
   }
   if (request.url === "/health/ready") {
     const fresh = Date.now() - lastCheckedAt < env.WORKER_HEARTBEAT_MS + 6000;
-    const ready = !stopping && databaseUp && fresh;
+    const ready = !stopping && databaseUp && fresh && jobsUp;
     response.writeHead(ready ? 200 : 503).end(JSON.stringify({
       service: "swing-worker", status: ready ? "ok" : "degraded",
-      checks: { database: databaseUp && fresh ? "up" : "down" },
+      checks: { database: databaseUp && fresh ? "up" : "down", jobs: jobsUp ? "up" : "down" },
     }));
     return;
   }
@@ -56,11 +78,14 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   if (timer) clearTimeout(timer);
+  if (jobTimer) clearTimeout(jobTimer);
+  stopJobs.abort();
   log("stopping", { signal });
   const deadline = setTimeout(() => process.exit(1), 8000);
   deadline.unref();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await activeHeartbeat;
+  await activeJob;
   await closeDatabase();
   clearTimeout(deadline);
   log("stopped");
@@ -76,4 +101,5 @@ server.on("error", () => {
 server.listen(env.WORKER_PORT, env.WORKER_HOST, () => {
   log("started", { port: env.WORKER_PORT });
   scheduleHeartbeat();
+  scheduleJob();
 });

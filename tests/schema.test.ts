@@ -12,6 +12,9 @@ import { seedStarterUniverse } from "../src/lib/instruments/starter-universe";
 import { NSE_SOURCE, parseAnnouncements } from "../src/lib/announcements/rss";
 import { analyzeStoredAnnouncements } from "../src/lib/research/analyze";
 import { ResearchError, type ResearchProvider } from "../src/lib/research/schema";
+import { claimJob, enqueueJob, finishJob, JobError, recoverExpiredJobs, renewJobLease } from "../src/lib/jobs/queue";
+import { runJobOnce } from "../src/lib/jobs/runner";
+import { createJobHandlers } from "../src/lib/jobs/handlers";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -79,6 +82,76 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("enqueues jobs idempotently and rejects conflicting reuse of a dedupe key", async () => {
+    const input = { kind: "test", dedupeKey: "job-1", payload: { a: 1, b: 2 } };
+    const results = await Promise.all([enqueueJob(db, input), enqueueJob(db, { ...input, payload: { b: 2, a: 1 } })]);
+    expect(results[0].id).toBe(results[1].id);
+    expect(await db.job.count()).toBe(1);
+    await expect(enqueueJob(db, { ...input, payload: {} })).rejects.toThrow("DEDUPE_KEY_CONFLICT");
+    await expect(enqueueJob(db, { ...input, kind: "other" })).rejects.toThrow("DEDUPE_KEY_CONFLICT");
+  });
+  it("claims a due job only once and leaves future jobs pending", async () => {
+    const queued = await enqueueJob(db, { kind: "test", dedupeKey: "due" });
+    await db.job.create({ data: { kind: "test", dedupeKey: "future", runAfter: new Date("2099-01-01") } });
+    const results = await Promise.all([claimJob(db, "one"), claimJob(db, "two")]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.find(Boolean)).toMatchObject({ id: queued.id, attempts: 1 });
+    expect(await db.job.findUniqueOrThrow({ where: { dedupeKey: "future" } })).toMatchObject({ status: "pending", attempts: 0 });
+  });
+  it("executes a registered handler and clears the lease on completion", async () => {
+    const job = await enqueueJob(db, { kind: "database.check", dedupeKey: "check" });
+    expect(await runJobOnce(db, "worker", createJobHandlers(db))).toMatchObject({ status: "succeeded", jobId: job.id });
+    expect(await db.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "succeeded", attempts: 1, lockedBy: null, lockedUntil: null });
+    expect(await runJobOnce(db, "worker", {})).toEqual({ status: "idle" });
+  });
+  it("retries sanitized failures with backoff and fails at the attempt limit", async () => {
+    const job = await enqueueJob(db, { kind: "test", dedupeKey: "fails", maxAttempts: 2 });
+    const handlers = { test: async () => { throw new Error("password=secret"); } };
+    expect(await runJobOnce(db, "worker", handlers)).toMatchObject({ status: "retry", errorCode: "HANDLER_FAILED" });
+    const retry = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(retry).toMatchObject({ attempts: 1, lastErrorCode: "HANDLER_FAILED", lockedBy: null, completedAt: null });
+    expect(retry.runAfter.getTime() - retry.updatedAt.getTime()).toBeGreaterThanOrEqual(4900);
+    expect(await claimJob(db, "worker")).toBeNull();
+    await db.job.update({ where: { id: job.id }, data: { runAfter: new Date(0) } });
+    expect(await runJobOnce(db, "worker", handlers)).toMatchObject({ status: "failed" });
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).completedAt).not.toBeNull();
+    expect(await claimJob(db, "worker")).toBeNull();
+  });
+  it("recovers expired leases and fences off old claims even on the same worker", async () => {
+    const job = await enqueueJob(db, { kind: "test", dedupeKey: "recover", maxAttempts: 2 });
+    const old = (await claimJob(db, "same-worker"))!;
+    expect(await renewJobLease(db, old)).toBe(true);
+    await db.job.update({ where: { id: job.id }, data: { lockedUntil: new Date(0) } });
+    expect(await renewJobLease(db, old)).toBe(false);
+    expect(await finishJob(db, old)).toBe("lease_lost");
+    expect(await recoverExpiredJobs(db)).toBe(1);
+    expect(await db.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "retry", lastErrorCode: "LEASE_EXPIRED", attempts: 1 });
+    await db.job.update({ where: { id: job.id }, data: { runAfter: new Date(0) } });
+    const current = (await claimJob(db, "same-worker"))!;
+    expect(current.lockedBy).not.toBe(old.lockedBy);
+    expect(await finishJob(db, old, new JobError("STALE"))).toBe("lease_lost");
+    expect(await finishJob(db, current)).toBe("succeeded");
+  });
+  it("terminally fails exhausted crash recovery and unsupported or invalid jobs", async () => {
+    const job = await enqueueJob(db, { kind: "test", dedupeKey: "last-attempt", maxAttempts: 1 });
+    await claimJob(db, "worker");
+    await db.job.update({ where: { id: job.id }, data: { lockedUntil: new Date(0) } });
+    await recoverExpiredJobs(db);
+    expect(await db.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "failed", attempts: 1, lockedBy: null });
+    await enqueueJob(db, { kind: "unknown", dedupeKey: "unknown" });
+    expect(await runJobOnce(db, "worker", createJobHandlers(db))).toMatchObject({ status: "failed", errorCode: "UNSUPPORTED_JOB_KIND" });
+    await enqueueJob(db, { kind: "database.check", dedupeKey: "invalid", payload: { unsupported: true } });
+    expect(await runJobOnce(db, "worker", createJobHandlers(db))).toMatchObject({ status: "failed", errorCode: "INVALID_JOB_PAYLOAD" });
+  });
+  it("stops claiming on shutdown and retries cooperative interrupted handlers", async () => {
+    const job = await enqueueJob(db, { kind: "test", dedupeKey: "stop" });
+    const stop = new AbortController();
+    stop.abort();
+    expect(await runJobOnce(db, "worker", {}, stop.signal)).toEqual({ status: "stopped" });
+    expect((await db.job.findUniqueOrThrow({ where: { id: job.id } })).attempts).toBe(0);
+    const during = new AbortController();
+    expect(await runJobOnce(db, "worker", { test: async () => { during.abort(); } }, during.signal)).toMatchObject({ status: "retry", errorCode: "JOB_INTERRUPTED" });
+  });
   async function researchInbox() {
     await seedStarterUniverse(db);
     await storeAnnouncements(db, [
