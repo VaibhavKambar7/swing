@@ -22,6 +22,7 @@ import { getJobStatus } from "../src/lib/jobs/status";
 import { storeMarketSnapshot, importMarketSnapshot } from "../src/lib/market-data/persist";
 import { syntheticSnapshot } from "./fixtures/market-snapshot";
 import type { MarketDataProvider } from "../src/lib/market-data/provider";
+import { detectStoredMovement, MOVEMENT_VERSION } from "../src/lib/market-data/detect";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -89,6 +90,49 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  const movementCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-03", coverageEnd: "2026-11-03", holidays: [], specialSessions: [] });
+  async function movementQuotes() {
+    await seedStarterUniverse(db);
+    const reference = syntheticSnapshot();
+    reference.retrievedAt = "2026-11-03T04:25:00.000Z";
+    reference.quote!.retrievedAt = reference.retrievedAt; reference.quote!.marketTime = reference.retrievedAt;
+    reference.quote!.ageSeconds = 0; reference.quote!.price = "100";
+    await storeMarketSnapshot(db, reference);
+    const current = syntheticSnapshot();
+    current.quote!.marketTime = current.retrievedAt; current.quote!.ageSeconds = 0; current.quote!.price = "103.123456789012345678";
+    await storeMarketSnapshot(db, current);
+    return current;
+  }
+  it("stores exact movement prices and deduplicates repeated/concurrent detections", async () => {
+    const current = await movementQuotes();
+    const at = new Date("2026-11-03T04:30:00Z");
+    const results = await Promise.all([detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", at), detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["duplicate", "inserted"]);
+    expect(await db.signal.count()).toBe(1);
+    const signal = await db.signal.findFirstOrThrow();
+    expect(signal).toMatchObject({ origin: "movement", detectorVersion: MOVEMENT_VERSION, context: { provider: "yahoo-experimental", direction: "up", delayStatus: "unknown" } });
+    expect(signal.price?.toFixed(18)).toBe(current.quote!.price);
+    expect(signal.referencePrice?.toString()).toBe("100");
+    expect(signal.priceChangePct?.toFixed(8)).toBe("3.12345679");
+    expect(await db.job.count()).toBe(0);
+    const repeated = { ...current, retrievedAt: "2026-11-03T04:31:00.000Z", quote: { ...current.quote!, retrievedAt: "2026-11-03T04:31:00.000Z", ageSeconds: 60 } };
+    await storeMarketSnapshot(db, repeated);
+    expect(await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date(repeated.retrievedAt))).toMatchObject({ status: "duplicate" });
+    expect(await db.signal.count()).toBe(1);
+  });
+  it("does not fall back from a missing latest quote and refuses stale saved data", async () => {
+    const current = await movementQuotes();
+    expect(await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date("2026-11-03T04:36:00Z"))).toMatchObject({ reason: "STALE_CURRENT_QUOTE" });
+    await storeMarketSnapshot(db, { ...current, retrievedAt: "2026-11-03T04:31:00.000Z", quote: null });
+    expect(await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date("2026-11-03T04:31:00Z"))).toMatchObject({ reason: "NO_CURRENT_QUOTE" });
+    expect(await db.signal.count()).toBe(0);
+  });
+  it("does not invent a baseline when only one quote is stored", async () => {
+    await seedStarterUniverse(db);
+    await storeMarketSnapshot(db, syntheticSnapshot());
+    expect(await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date("2026-11-03T04:30:00Z"))).toMatchObject({ reason: "NO_REFERENCE_QUOTE" });
+    expect(await db.signal.count()).toBe(0);
+  });
   it("stores precise quotes/candles once under concurrent repeat imports", async () => {
     await seedStarterUniverse(db);
     const snapshot = syntheticSnapshot();

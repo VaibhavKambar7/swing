@@ -29,7 +29,8 @@
     "market:check": "tsx scripts/check-market.ts",
     "jobs:status": "tsx scripts/check-jobs.ts",
     "prices:check": "node --use-env-proxy --import tsx scripts/check-prices.ts",
-    "prices:import": "node --use-env-proxy --import tsx scripts/import-prices.ts"
+    "prices:import": "node --use-env-proxy --import tsx scripts/import-prices.ts",
+    "prices:detect": "tsx scripts/detect-movements.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

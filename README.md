@@ -377,8 +377,8 @@ redirect following, and a 2 MB response limit. Cloud network settings must allow
 error codes without raw response bodies. Fixtures test normalization and transport
 behavior only; there is no runtime fixture fallback. Checks do not write prices
 to the database, create signals, call AI or schedule polling. Use the separate
-import command below for persistence; movement detection and automatic price
-polling are subsequent steps.
+import command below for persistence and the detector for stored observations.
+Automatic price polling is a separate subsequent step.
 
 ### Persisting market observations
 
@@ -419,6 +419,47 @@ stored quote is fresh now; consumers must recompute age from `quoteTime` before
 using it. No movement signal, model call, scheduled price job or trading action
 is created by importing observations. Live Yahoo access is still a separate
 environment/provider verification requirement.
+
+### Detecting movements from stored quotes
+
+After importing at least two suitable quote observations, run:
+
+```sh
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run prices:detect -- TCS
+```
+
+The initial version flags observed moves of at least **2% in either direction**
+over a five-minute quote window. The reference must be at or before the target
+five-minute point, within sixty seconds of it (a total source-time gap of 5–6
+minutes). This is an initial research trigger, not a buy/sell rule. Comparisons
+use decimal arithmetic before rounding the reported percentage to eight places.
+Signal/reference prices retain the full stored numeric(38,18) precision.
+
+Detection requires a known open session from the maintained calendar. The latest
+retrieval must have a quote whose source time is in that session and no more than
+five minutes old **at detection time**. Future observations, missing latest
+quotes, stale references at retrieval, different instruments/providers/symbols/
+currencies, overnight baselines, and large source-time gaps are rejected. The
+detector does not fall back to an older retrieval if the latest one has no quote.
+Daily candles, adjusted closes, volume, benchmarks and sectors are not used in
+this version. Insufficient observations return a named skipped reason rather
+than inventing a comparison.
+
+Qualifying results are stored as `movement` records in `signals`, with the
+detector version, percentage, source timestamps and both snapshot IDs. Provider
+delay remains unknown and the context records that source quality is unverified.
+There is one signal per instrument/provider/symbol/current source timestamp and
+detector version: retries, concurrent detections and re-fetching the same quote
+cannot create extra signals. Later price/reference revisions at that same source
+timestamp do not rewrite an existing signal. Duplicate results report the
+persisted assessment, not a replacement calculation. There is no cooldown across
+different quote timestamps yet.
+
+The command reads the database only for prices: it does not fetch quotes, invoke
+AI, create jobs or deliver notifications. Announcement/evidence matching and
+research integration are separate work. Unknown calendar coverage is a failing
+CLI check; other skipped cases are normal explicit outcomes. Live market-data
+suitability and calendar configuration remain required for operational use.
 
 ## Operational checks and restart recovery
 
