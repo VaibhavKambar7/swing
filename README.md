@@ -329,6 +329,51 @@ current schedule monitors the implemented announcement RSS source only. Separate
 news sources, price polling, daily briefings, and alert delivery are not added
 by this scheduler.
 
+## Operational checks and restart recovery
+
+Inspect persisted job state independently of whether a worker is running:
+
+```sh
+npm run jobs:status
+```
+
+The command returns counts for every job state, due jobs, expired running leases,
+the ten latest terminal failures, last successful pipeline completion, and
+scheduler checkpoint timestamps. It is read-only: inspecting an expired job does
+not recover it. A successful query exits zero even if failed jobs exist; inspect
+`hasFailedJobs`, counts and error codes. Query failure exits nonzero. Payloads,
+dedupe keys, lease tokens, provider inputs and connection details are omitted.
+Unknown job kinds and non-code error text are masked in this status output.
+
+The worker's internal `GET /health/status` endpoint adds runtime information:
+startup time, active job ID/kind/attempt, recent database/queue/scheduler check
+times, and the latest safe scheduler error code. It returns HTTP 200 when the
+worker is ready and 503 when degraded. `/health/ready` remains the smaller
+readiness check; `/health/live` reports that the process responds. Database and
+idle queue/scheduler check freshness affect readiness; an active job can remain
+healthy while executing longer than one poll interval. Historical job failures
+are reported separately and do not automatically mark the worker down.
+
+On restart the worker reads the existing PostgreSQL queue; it does not reset job
+state or create replacement keys for completed work. Unexpired running leases
+remain owned until expiry. An expired lease is recovered on a subsequent poll,
+then waits for retry backoff unless its attempt budget has been exhausted.
+`jobs_recovered`, `job_started`, and `job_finished` structured events make these
+transitions visible. Discovery timestamps, feed deduplication, input hashes and
+research uniqueness survive retries. At-least-once processing still permits
+repeated external API calls; database deduplication is not a guarantee of exactly
+one provider request.
+
+If monitoring is degraded, inspect status and worker logs, fix the reported
+calendar/network/database/provider configuration, and let retries run. The
+scheduler reloads its calendar on each tick; changing environment variables
+requires a worker restart. Terminal failed jobs are retained for inspection;
+after fixing their cause, explicitly enqueue a new operation with a new key if
+needed. Do not reset the whole queue or delete database data to recover a worker.
+When restarting after a hard kill, allow the two-minute lease plus retry delay
+before expecting interrupted work to resume. Graceful termination requests stop
+new claims and use the eight-second shutdown deadline described above.
+
 ## Indian market calendar
 
 The calendar engine describes NSE equity regular sessions in `Asia/Kolkata`:
@@ -382,7 +427,9 @@ operations.
 | `GET /api/health/ready` on port 3000 | Database and worker are ready; otherwise HTTP 503 |
 | `GET /health/live` on port 3001 | Worker process is responding |
 | `GET /health/ready` on port 3001 | Database heartbeat is healthy and queue polling works |
+| `GET /health/status` on port 3001 | Runtime checks, job counts, expired leases and recent failures |
 | `npm run db:check` | Verify a real PostgreSQL query through Prisma |
+| `npm run jobs:status` | Read persisted queue status without starting a worker |
 
 Health endpoints expose component status only, with no credentials. The worker binds to loopback locally; Compose exposes it only inside its network. The web server also binds to loopback by default. Authentication and settings endpoints arrive in subsequent tasks; there are no credential-entry endpoints in this foundation.
 

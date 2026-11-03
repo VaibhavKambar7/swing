@@ -9,8 +9,10 @@ import { createJobHandlers } from "../lib/jobs/handlers";
 import { loadMarketCalendar } from "../lib/market/load-calendar";
 import { CalendarError } from "../lib/market/calendar";
 import { scheduleAnnouncementRun } from "../lib/market/scheduler";
+import { getJobStatus, publicJobKind } from "../lib/jobs/status";
 
 const env = getEnv();
+const startedAt = new Date().toISOString();
 let stopping = false;
 let timer: NodeJS.Timeout | undefined;
 let activeHeartbeat: Promise<void> | undefined;
@@ -24,6 +26,26 @@ let jobsUp = false;
 let schedulerTimer: NodeJS.Timeout | undefined;
 let activeScheduler: Promise<void> | undefined;
 let schedulerUp = !env.WORKER_SCHEDULER_ENABLED;
+let lastJobPollAt = 0;
+let activeJobInfo: { jobId: string; kind: string; attempt: number } | null = null;
+let lastSchedulerTickAt = 0;
+let schedulerErrorCode: string | null = null;
+
+function runtimeStatus() {
+  const now = Date.now();
+  const databaseReady = databaseUp && now - lastCheckedAt < env.WORKER_HEARTBEAT_MS + 6000;
+  const jobsReady = jobsUp && (activeJobInfo !== null || now - lastJobPollAt < env.WORKER_JOB_POLL_MS + 6000);
+  const schedulerReady = !env.WORKER_SCHEDULER_ENABLED || (schedulerUp && now - lastSchedulerTickAt < env.WORKER_SCHEDULER_TICK_MS + 6000);
+  return {
+    ready: !stopping && databaseReady && jobsReady && schedulerReady,
+    checks: { database: databaseReady ? "up" : "down", jobs: jobsReady ? "up" : "down", scheduler: !env.WORKER_SCHEDULER_ENABLED ? "disabled" : schedulerReady ? "up" : "down" },
+    startedAt, activeJob: activeJobInfo,
+    lastDatabaseCheckAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
+    lastJobPollAt: lastJobPollAt ? new Date(lastJobPollAt).toISOString() : null,
+    lastSchedulerTickAt: lastSchedulerTickAt ? new Date(lastSchedulerTickAt).toISOString() : null,
+    schedulerErrorCode,
+  };
+}
 
 function scheduleTick() {
   if (stopping || !env.WORKER_SCHEDULER_ENABLED) return;
@@ -31,10 +53,13 @@ function scheduleTick() {
     analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT,
   })).then((result) => {
     schedulerUp = true;
+    lastSchedulerTickAt = Date.now(); schedulerErrorCode = null;
     if (result.status === "enqueued") log("pipeline_scheduled", result);
   }).catch((error) => {
     schedulerUp = false;
-    log("scheduler_tick_failed", { code: error instanceof CalendarError ? error.code : "SCHEDULER_UNAVAILABLE" });
+    lastSchedulerTickAt = Date.now();
+    schedulerErrorCode = error instanceof CalendarError ? error.code : "SCHEDULER_UNAVAILABLE";
+    log("scheduler_tick_failed", { code: schedulerErrorCode });
   }).finally(() => {
     if (!stopping) schedulerTimer = setTimeout(scheduleTick, env.WORKER_SCHEDULER_TICK_MS);
   });
@@ -43,13 +68,19 @@ function scheduleTick() {
 function scheduleJob() {
   if (stopping) return;
   const db = getDatabase();
-  activeJob = runJobOnce(db, workerId, createJobHandlers(db), stopJobs.signal).then((result) => {
+  activeJob = runJobOnce(db, workerId, createJobHandlers(db), stopJobs.signal, {
+    onRecovery: (count) => log("jobs_recovered", { count }),
+    onClaim: (job) => { activeJobInfo = { ...job, kind: publicJobKind(job.kind) }; jobsUp = true; lastJobPollAt = Date.now(); log("job_started", activeJobInfo); },
+  }).then((result) => {
     jobsUp = true;
+    lastJobPollAt = Date.now();
     if (result.jobId) log("job_finished", result);
   }).catch(() => {
     jobsUp = false;
+    lastJobPollAt = Date.now();
     log("job_poll_failed");
   }).finally(() => {
+    activeJobInfo = null;
     if (!stopping) jobTimer = setTimeout(scheduleJob, env.WORKER_JOB_POLL_MS);
   });
 }
@@ -84,12 +115,20 @@ const server = createServer((request, response) => {
     return;
   }
   if (request.url === "/health/ready") {
-    const fresh = Date.now() - lastCheckedAt < env.WORKER_HEARTBEAT_MS + 6000;
-    const ready = !stopping && databaseUp && fresh && jobsUp && schedulerUp;
+    const { ready, checks } = runtimeStatus();
     response.writeHead(ready ? 200 : 503).end(JSON.stringify({
       service: "swing-worker", status: ready ? "ok" : "degraded",
-      checks: { database: databaseUp && fresh ? "up" : "down", jobs: jobsUp ? "up" : "down", scheduler: !env.WORKER_SCHEDULER_ENABLED ? "disabled" : schedulerUp ? "up" : "down" },
+      checks,
     }));
+    return;
+  }
+  if (request.url === "/health/status") {
+    void getJobStatus(getDatabase()).then((queue) => {
+      const runtime = runtimeStatus();
+      response.writeHead(runtime.ready ? 200 : 503).end(JSON.stringify({ service: "swing-worker", status: runtime.ready ? "ok" : "degraded", runtime, queue }));
+    }).catch(() => {
+      response.writeHead(503).end(JSON.stringify({ service: "swing-worker", status: "degraded", code: "QUEUE_UNAVAILABLE" }));
+    });
     return;
   }
   response.writeHead(404).end(JSON.stringify({ error: "Not found" }));

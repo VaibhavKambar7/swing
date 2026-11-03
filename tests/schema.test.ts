@@ -18,6 +18,7 @@ import { createJobHandlers } from "../src/lib/jobs/handlers";
 import { parseCalendar } from "../src/lib/market/calendar";
 import { scheduleAnnouncementRun } from "../src/lib/market/scheduler";
 import { createPipelineStages } from "../src/lib/jobs/pipeline";
+import { getJobStatus } from "../src/lib/jobs/status";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -85,6 +86,32 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("reports queue failures, due work and expired leases without sensitive fields or mutations", async () => {
+    await db.job.createMany({ data: [
+      { kind: "secret-kind", dedupeKey: "secret-key", payload: { credential: "secret-value" }, status: "failed", completedAt: new Date(), lastErrorCode: "secret-error" },
+      { kind: "database.check", dedupeKey: "retry-status", status: "retry", attempts: 1, runAfter: new Date(0), lastErrorCode: "HANDLER_FAILED" },
+      { kind: "database.check", dedupeKey: "expired-status", status: "running", attempts: 1, lockedBy: "secret-lease", lockedUntil: new Date(0) },
+      { kind: "database.check", dedupeKey: "future-status", runAfter: new Date("2099-01-01") },
+    ] });
+    await db.pollingCheckpoint.create({ data: { source: "swing-scheduler", scope: "announcements-v1", cursor: { secret: "secret-cursor" }, lastSuccessAt: new Date() } });
+    const result = await getJobStatus(db);
+    expect(result).toMatchObject({ counts: { pending: 1, retry: 1, running: 1, failed: 1, succeeded: 0 }, dueJobs: 1, expiredLeases: 1, hasFailedJobs: true, recentFailures: [{ kind: "unsupported", lastErrorCode: "UNKNOWN_ERROR" }] });
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(await db.job.count()).toBe(4);
+    expect((await db.job.findUniqueOrThrow({ where: { dedupeKey: "expired-status" } })).status).toBe("running");
+  });
+  it("emits recovery and claim events without letting telemetry failures strand work", async () => {
+    const job = await enqueueJob(db, { kind: "database.check", dedupeKey: "observe-recovery" });
+    await claimJob(db, "dead-worker");
+    await db.job.update({ where: { id: job.id }, data: { lockedUntil: new Date(0) } });
+    const recovered = vi.fn();
+    expect(await runJobOnce(db, "new-worker", createJobHandlers(db), undefined, { onRecovery: recovered })).toEqual({ status: "idle" });
+    expect(recovered).toHaveBeenCalledWith(1);
+    await db.job.update({ where: { id: job.id }, data: { runAfter: new Date(0) } });
+    const claimed = vi.fn(() => { throw new Error("Telemetry failure"); });
+    expect(await runJobOnce(db, "new-worker", createJobHandlers(db), undefined, { onClaim: claimed })).toMatchObject({ status: "succeeded", attempt: 2 });
+    expect(claimed).toHaveBeenCalledWith({ jobId: job.id, kind: "database.check", attempt: 2 });
+  });
   const schedulerCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-11-08", holidays: [], specialSessions: [] });
   const schedulerOptions = { analyze: false, analysisLimit: 1 };
   it("deduplicates concurrent scheduler ticks and retains the slot across restarts", async () => {

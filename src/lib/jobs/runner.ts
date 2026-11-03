@@ -3,12 +3,19 @@ import { claimJob, finishJob, JobError, recoverExpiredJobs, renewJobLease, type 
 
 export type JobHandler = (job: ClaimedJob, signal: AbortSignal) => Promise<void>;
 export type JobHandlers = Record<string, JobHandler>;
+type JobObserver = {
+  onRecovery?(count: number): void;
+  onClaim?(job: { jobId: string; kind: string; attempt: number }): void;
+};
 
-export async function runJobOnce(db: PrismaClient, workerId: string, handlers: JobHandlers, stop?: AbortSignal) {
+export async function runJobOnce(db: PrismaClient, workerId: string, handlers: JobHandlers, stop?: AbortSignal, observer?: JobObserver) {
   if (stop?.aborted) return { status: "stopped" };
-  await recoverExpiredJobs(db);
+  const recovered = await recoverExpiredJobs(db);
+  // Observability must never interrupt a durable state transition.
+  try { if (recovered) observer?.onRecovery?.(recovered); } catch { /* ignore observer failures */ }
   const job = await claimJob(db, workerId);
   if (!job) return { status: "idle" };
+  try { observer?.onClaim?.({ jobId: job.id, kind: job.kind, attempt: job.attempts }); } catch { /* ignore observer failures */ }
   const controller = new AbortController();
   const onStop = () => controller.abort();
   stop?.addEventListener("abort", onStop, { once: true });
