@@ -15,6 +15,10 @@ const envSchema = z.object({
   }).default("http://127.0.0.1:3001"),
   WORKER_HEARTBEAT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   WORKER_JOB_POLL_MS: z.coerce.number().int().min(500).max(60000).default(2000),
+  WORKER_SCHEDULER_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  WORKER_SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
+  WORKER_SCHEDULER_AI_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  WORKER_SCHEDULER_AI_LIMIT: z.coerce.number().int().min(1).max(20).default(1),
 });
 
 export type Env = z.infer<typeof envSchema>;

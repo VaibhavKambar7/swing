@@ -190,7 +190,8 @@ npm run announcements:analyze -- --limit 5
 Only matched, active NSE universe equities with a `keep` or `review` decision
 from the current filtering rules are eligible. Routine items, unmatched items,
 and unfiltered items are excluded. Research runs only through the manual command
-or an explicitly enqueued analysis job; no analysis jobs are scheduled automatically.
+or an explicitly enqueued analysis job. Scheduled pipelines invoke AI only when
+`WORKER_SCHEDULER_AI_ENABLED=true` is explicitly configured.
 The default limit is five provider attempts
 per invocation, with a maximum of twenty. API use may consume quota or incur
 charges; the provider's plan determines pricing. Model availability depends on
@@ -220,13 +221,14 @@ HTTP failures, blocked/truncated generations and invalid output are not saved as
 successful research. Failed items can be retried by rerunning the command. The
 command returns a failing exit status if any item fails and emits safe error codes
 without provider response bodies or credentials. The provider timeout is 60
-seconds; retries and scheduling belong in the later job runner. Missing
+seconds; queued jobs provide bounded retries and the optional scheduler described
+below creates pipeline jobs. Missing
 credentials fail explicitly; there is no fabricated or fixture result fallback.
 
 ## Database job runner
 
-The persistent worker polls PostgreSQL for jobs; it does not create scheduled
-jobs or chain pipeline stages yet. Run `npm run worker` (or `worker:dev`) and
+The persistent worker polls PostgreSQL for jobs. Automatic scheduling is disabled
+by default; it can be enabled as described below. Run `npm run worker` (or `worker:dev`) and
 enqueue a job explicitly:
 
 ```sh
@@ -238,9 +240,9 @@ npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
 ```
 
 Supported kinds are `database.check`, `announcements.fetch`,
-`announcements.match`, `announcements.filter`, and `announcements.analyze`.
-Payloads must be empty except the optional analysis `limit` (default one,
-maximum twenty). Use a unique dedupe key for a new operation. Reusing a key with
+`announcements.match`, `announcements.filter`, `announcements.analyze`, and
+`announcements.pipeline`. Payloads must be empty except analysis `limit` or
+pipeline `analyze`/`analysisLimit`, described below. Use a unique dedupe key for a new operation. Reusing a key with
 the same kind, payload and attempt limit returns the existing job, including a
 completed or failed job; it does not reset it. Conflicting reuse is rejected.
 Inspect jobs using `npm run db:studio`; worker logs include job ID, status,
@@ -267,8 +269,65 @@ process exits, the lease expires and another worker can recover the job.
 Execution is at least once. Lease tokens protect job state, not external side
 effects: interrupted requests or lost leases can overlap with retries. Ingestion
 deduplication and research uniqueness still apply, but provider calls can be
-repeated. The runner never promises exactly-once API calls. Job chaining, market
-calendars, and automatic schedules are separate subsequent steps.
+repeated. The runner never promises exactly-once API calls.
+
+## Automatic announcement scheduling
+
+First configure a maintained NSE calendar, seed your stock universe, apply
+migrations, and ensure the feed is reachable. Then enable scheduling:
+
+```sh
+MARKET_CALENDAR_FILE=config/market-calendar.local.json WORKER_SCHEDULER_ENABLED=true npm run worker
+```
+
+The worker reloads the calendar on each scheduler tick (default ten seconds).
+During a known trading session it schedules one pipeline per five-minute window,
+anchored to that session's opening time. At all other covered times, including
+holidays/weekends and gaps between special sessions, it uses one window per IST
+clock hour. At transitions, such as 15:30 close, an off-hours run can happen
+immediately; subsequent runs follow hourly boundaries. Unknown calendar coverage,
+missing files, or invalid files stop new scheduling and degrade scheduler
+readiness. Manual jobs can still run. Synthetic example calendar data is never
+loaded implicitly.
+
+Each pipeline executes fetch/store → match → filter → optional research, in that
+order. Later stages do not run after an earlier failure. Pipeline jobs use the
+normal retry/lease machinery; retries start from fetch, and existing storage,
+matching, filtering and research deduplication make repeat processing safe for
+database records. There are no separate child jobs or durable per-stage
+checkpoints. Source requests and provider calls can repeat after an interruption.
+
+Slot keys live in PostgreSQL. Repeated ticks, worker restarts and multiple
+scheduler replicas cannot create duplicate scheduled jobs for a slot. A locked
+scheduler checkpoint serializes replicas. While a pipeline is pending, running or
+retrying, newer slots are skipped rather than building a backlog. If it finishes
+within the current slot, that slot can then be scheduled. Restarting schedules
+only the current window, not a burst of missed historical checks. Manual pipeline
+enqueueing is explicit and can overlap with another pipeline; avoid doing that
+while the scheduler is running.
+
+Research in scheduled pipelines is separately disabled by default. Set
+`WORKER_SCHEDULER_AI_ENABLED=true` to opt in, with a Gemini key and API access.
+`WORKER_SCHEDULER_AI_LIMIT` defaults to one provider attempt per pipeline attempt
+(range 1–20), not a daily quota. Retries and many scheduled windows can consume
+additional API quota. Missing AI configuration fails the pipeline visibly when
+the research stage is reached. Leave AI disabled to collect and classify filings
+without model use.
+
+To enqueue a full pipeline manually without enabling a schedule:
+
+```sh
+npm run jobs:enqueue -- announcements.pipeline manual-pipeline-1
+# Explicitly include research:
+npm run jobs:enqueue -- announcements.pipeline manual-pipeline-ai-1 '{"analyze":true,"analysisLimit":1}'
+```
+
+`WORKER_SCHEDULER_TICK_MS` can be 1000–60000. `/health/ready` reports the scheduler
+as `disabled`, `up`, or `down`. Scheduler health means tick/enqueue operations
+work; individual failed pipelines remain visible in jobs and worker logs. The
+current schedule monitors the implemented announcement RSS source only. Separate
+news sources, price polling, daily briefings, and alert delivery are not added
+by this scheduler.
 
 ## Indian market calendar
 
@@ -312,7 +371,8 @@ MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run market:check
 offset. Output includes the IST date, day kind, session phase, current/next session
 in UTC and IST, source, and coverage. Missing configuration, invalid files, or an
 unknown current date produce a failing exit code. This is a standalone engine;
-it does not yet schedule jobs or restrict explicitly queued/manual operations.
+the optional scheduler consumes this engine, without restricting explicit manual
+operations.
 
 ## Health checks
 
@@ -338,6 +398,11 @@ Copy `.env.example` to `.env`; never commit `.env`. Next.js, worker scripts, and
 | `WORKER_HEALTH_URL` | `http://127.0.0.1:3001`; web uses this to check the worker |
 | `WORKER_HEARTBEAT_MS` | `10000`, permitted range 1000–60000 |
 | `WORKER_JOB_POLL_MS` | `2000`, permitted range 500–60000 |
+| `WORKER_SCHEDULER_ENABLED` | `false`; enable announcement scheduling explicitly |
+| `WORKER_SCHEDULER_TICK_MS` | `10000`, permitted range 1000–60000 |
+| `WORKER_SCHEDULER_AI_ENABLED` | `false`; scheduled research is separately opt-in |
+| `WORKER_SCHEDULER_AI_LIMIT` | `1`, range 1–20, per pipeline attempt |
+| `MARKET_CALENDAR_FILE` | Maintained calendar file required when scheduling is enabled |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose database initialization; unused when connecting to an existing database |
 
 For Compose, keep database settings consistent with `DATABASE_URL`. URL-encode special characters in connection-string credentials. The generated Compose URL assumes a URL-safe password; change it to an explicit encoded URL if needed. Changing initialization credentials does not update an existing PostgreSQL volume.
@@ -411,6 +476,6 @@ Foreign keys prevent signals from referencing another stock's announcement and a
 When implemented, ingestion must create a signal and its pending job in one transaction; polling checkpoints must advance only after durable ingestion. Recover expired leases and use bounded retries. Telegram timeouts may leave delivery status `unknown`: stored deduplication keys cannot guarantee exactly-once delivery to an external API. Benchmark/sector mappings must be validated against index instruments by the ingestion layer.
 
 The worker runs health checks and explicitly queued announcement/research jobs.
-Market calendars, automatic scheduling, job chaining and delivery are separate
-steps; persistent work stays outside Next.js request handlers. Redis/BullMQ is
-deferred.
+Optional market-aware scheduling runs sequential announcement pipelines;
+persistent work stays outside Next.js request handlers. Additional sources,
+briefings and delivery are separate steps. Redis/BullMQ is deferred.

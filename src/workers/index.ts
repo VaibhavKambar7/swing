@@ -6,6 +6,9 @@ import { closeDatabase, getDatabase } from "../lib/db";
 import { checkDatabase } from "../lib/health";
 import { runJobOnce } from "../lib/jobs/runner";
 import { createJobHandlers } from "../lib/jobs/handlers";
+import { loadMarketCalendar } from "../lib/market/load-calendar";
+import { CalendarError } from "../lib/market/calendar";
+import { scheduleAnnouncementRun } from "../lib/market/scheduler";
 
 const env = getEnv();
 let stopping = false;
@@ -18,6 +21,24 @@ const stopJobs = new AbortController();
 let jobTimer: NodeJS.Timeout | undefined;
 let activeJob: Promise<void> | undefined;
 let jobsUp = false;
+let schedulerTimer: NodeJS.Timeout | undefined;
+let activeScheduler: Promise<void> | undefined;
+let schedulerUp = !env.WORKER_SCHEDULER_ENABLED;
+
+function scheduleTick() {
+  if (stopping || !env.WORKER_SCHEDULER_ENABLED) return;
+  activeScheduler = loadMarketCalendar().then((calendar) => scheduleAnnouncementRun(getDatabase(), calendar, {
+    analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT,
+  })).then((result) => {
+    schedulerUp = true;
+    if (result.status === "enqueued") log("pipeline_scheduled", result);
+  }).catch((error) => {
+    schedulerUp = false;
+    log("scheduler_tick_failed", { code: error instanceof CalendarError ? error.code : "SCHEDULER_UNAVAILABLE" });
+  }).finally(() => {
+    if (!stopping) schedulerTimer = setTimeout(scheduleTick, env.WORKER_SCHEDULER_TICK_MS);
+  });
+}
 
 function scheduleJob() {
   if (stopping) return;
@@ -64,10 +85,10 @@ const server = createServer((request, response) => {
   }
   if (request.url === "/health/ready") {
     const fresh = Date.now() - lastCheckedAt < env.WORKER_HEARTBEAT_MS + 6000;
-    const ready = !stopping && databaseUp && fresh && jobsUp;
+    const ready = !stopping && databaseUp && fresh && jobsUp && schedulerUp;
     response.writeHead(ready ? 200 : 503).end(JSON.stringify({
       service: "swing-worker", status: ready ? "ok" : "degraded",
-      checks: { database: databaseUp && fresh ? "up" : "down", jobs: jobsUp ? "up" : "down" },
+      checks: { database: databaseUp && fresh ? "up" : "down", jobs: jobsUp ? "up" : "down", scheduler: !env.WORKER_SCHEDULER_ENABLED ? "disabled" : schedulerUp ? "up" : "down" },
     }));
     return;
   }
@@ -79,6 +100,7 @@ async function shutdown(signal: string) {
   stopping = true;
   if (timer) clearTimeout(timer);
   if (jobTimer) clearTimeout(jobTimer);
+  if (schedulerTimer) clearTimeout(schedulerTimer);
   stopJobs.abort();
   log("stopping", { signal });
   const deadline = setTimeout(() => process.exit(1), 8000);
@@ -86,6 +108,7 @@ async function shutdown(signal: string) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await activeHeartbeat;
   await activeJob;
+  await activeScheduler;
   await closeDatabase();
   clearTimeout(deadline);
   log("stopped");
@@ -102,4 +125,5 @@ server.listen(env.WORKER_PORT, env.WORKER_HOST, () => {
   log("started", { port: env.WORKER_PORT });
   scheduleHeartbeat();
   scheduleJob();
+  scheduleTick();
 });

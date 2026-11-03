@@ -15,6 +15,9 @@ import { ResearchError, type ResearchProvider } from "../src/lib/research/schema
 import { claimJob, enqueueJob, finishJob, JobError, recoverExpiredJobs, renewJobLease } from "../src/lib/jobs/queue";
 import { runJobOnce } from "../src/lib/jobs/runner";
 import { createJobHandlers } from "../src/lib/jobs/handlers";
+import { parseCalendar } from "../src/lib/market/calendar";
+import { scheduleAnnouncementRun } from "../src/lib/market/scheduler";
+import { createPipelineStages } from "../src/lib/jobs/pipeline";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -82,6 +85,44 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  const schedulerCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-11-08", holidays: [], specialSessions: [] });
+  const schedulerOptions = { analyze: false, analysisLimit: 1 };
+  it("deduplicates concurrent scheduler ticks and retains the slot across restarts", async () => {
+    const at = new Date("2026-11-02T09:15:00+05:30");
+    const results = await Promise.all([scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, at), scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["already_scheduled", "enqueued"]);
+    expect(await db.job.count()).toBe(1);
+    expect((await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:19:00+05:30"))).status).toBe("already_scheduled");
+    expect(await db.pollingCheckpoint.findFirstOrThrow()).toMatchObject({ source: "swing-scheduler", scope: "announcements-v1", cursor: { slotStart: "2026-11-02T03:45:00.000Z", mode: "session" } });
+  });
+  it("does not accumulate pipelines while earlier work is active or retrying", async () => {
+    const first = await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:15:00+05:30"));
+    expect((await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:20:00+05:30"))).status).toBe("busy");
+    await db.job.update({ where: { id: first.jobId }, data: { status: "retry" } });
+    expect((await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:25:00+05:30"))).status).toBe("busy");
+    await db.job.update({ where: { id: first.jobId }, data: { status: "failed", completedAt: new Date() } });
+    expect((await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:25:00+05:30"))).status).toBe("enqueued");
+    expect(await db.job.count()).toBe(2);
+    await expect(scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2027-01-01"))).rejects.toThrow("CALENDAR_COVERAGE_REQUIRED");
+    expect(await db.job.count()).toBe(2);
+  });
+  it("executes a scheduled pipeline through storage, matching and filtering, then retries safely", async () => {
+    await seedStarterUniverse(db);
+    const result = await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:15:00+05:30"));
+    const stages = createPipelineStages(db);
+    const item = { sourceId: "pipeline-fixture", title: "TCS - Results", description: "Synthetic results fixture", url: "https://example.com/pipeline", publishedAt: null };
+    // Explicit synthetic input for a database pipeline test, never a live fallback.
+    stages.fetch = () => storeAnnouncements(db, [item]);
+    expect(await runJobOnce(db, "pipeline-worker", createJobHandlers(db, stages))).toMatchObject({ status: "succeeded", jobId: result.jobId });
+    expect(await db.feedItem.findFirstOrThrow()).toMatchObject({ matchStatus: "matched", relevanceStatus: "keep" });
+    expect(await db.feedResearch.count()).toBe(0);
+    const next = await scheduleAnnouncementRun(db, schedulerCalendar, schedulerOptions, new Date("2026-11-02T09:20:00+05:30"));
+    const failing = { ...stages, filter: async () => { throw new Error("private remote details"); } };
+    expect(await runJobOnce(db, "pipeline-worker", createJobHandlers(db, failing))).toMatchObject({ status: "retry", errorCode: "PIPELINE_FILTER_FAILED" });
+    await db.job.update({ where: { id: next.jobId }, data: { runAfter: new Date(0) } });
+    expect(await runJobOnce(db, "pipeline-worker", createJobHandlers(db, stages))).toMatchObject({ status: "succeeded" });
+    expect(await db.feedItem.count()).toBe(1);
+  });
   it("enqueues jobs idempotently and rejects conflicting reuse of a dedupe key", async () => {
     const input = { kind: "test", dedupeKey: "job-1", payload: { a: 1, b: 2 } };
     const results = await Promise.all([enqueueJob(db, input), enqueueJob(db, { ...input, payload: { b: 2, a: 1 } })]);
