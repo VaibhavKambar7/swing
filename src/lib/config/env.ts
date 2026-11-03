@@ -19,6 +19,7 @@ const envSchema = z.object({
   WORKER_SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   WORKER_SCHEDULER_AI_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_SCHEDULER_AI_LIMIT: z.coerce.number().int().min(1).max(20).default(1),
+  WORKER_MORNING_BRIEFING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 export type Env = z.infer<typeof envSchema>;

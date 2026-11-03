@@ -10,6 +10,7 @@ import { loadMarketCalendar } from "../lib/market/load-calendar";
 import { CalendarError } from "../lib/market/calendar";
 import { scheduleAnnouncementRun } from "../lib/market/scheduler";
 import { getJobStatus, publicJobKind } from "../lib/jobs/status";
+import { scheduleMorningBriefing } from "../lib/briefings/morning";
 
 const env = getEnv();
 const startedAt = new Date().toISOString();
@@ -49,12 +50,17 @@ function runtimeStatus() {
 
 function scheduleTick() {
   if (stopping || !env.WORKER_SCHEDULER_ENABLED) return;
-  activeScheduler = loadMarketCalendar().then((calendar) => scheduleAnnouncementRun(getDatabase(), calendar, {
-    analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT,
-  })).then((result) => {
+  activeScheduler = loadMarketCalendar().then((calendar) => {
+    const now = new Date();
+    return Promise.all([
+      scheduleAnnouncementRun(getDatabase(), calendar, { analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT }, now),
+      env.WORKER_MORNING_BRIEFING_ENABLED ? scheduleMorningBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
+    ]);
+  }).then(([result, briefing]) => {
     schedulerUp = true;
     lastSchedulerTickAt = Date.now(); schedulerErrorCode = null;
     if (result.status === "enqueued") log("pipeline_scheduled", result);
+    if (briefing.status === "enqueued") log("morning_briefing_scheduled", briefing);
   }).catch((error) => {
     schedulerUp = false;
     lastSchedulerTickAt = Date.now();

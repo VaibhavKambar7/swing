@@ -394,6 +394,22 @@ model Job {
   @@map("jobs")
 }
 
+model DailyBriefing {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind           String
+  sessionDate    DateTime @map("session_date") @db.Date
+  reportVersion  String   @map("report_version")
+  cutoffAt       DateTime @map("cutoff_at") @db.Timestamptz(6)
+  windowStart    DateTime @map("window_start") @db.Timestamptz(6)
+  generatedAt    DateTime @default(now()) @map("generated_at") @db.Timestamptz(6)
+  content        Json     @db.JsonB
+  markdown       String
+
+  @@unique([kind, sessionDate, reportVersion], map: "daily_briefings_session_unique")
+  @@index([cutoffAt], map: "daily_briefings_cutoff_idx")
+  @@map("daily_briefings")
+}
+
 model PollingCheckpoint {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   source          String

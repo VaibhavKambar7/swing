@@ -241,9 +241,9 @@ npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
 
 Supported kinds are `database.check`, `announcements.fetch`,
 `announcements.match`, `announcements.filter`, `announcements.analyze`, and
-`announcements.pipeline`, and `movements.research`. Payloads must be empty except
+`announcements.pipeline`, `movements.research`, and `briefings.morning`. Payloads must be empty except
 analysis `limit`, pipeline `analyze`/`analysisLimit`, or movement `signalId` and
-optional `analyze`, described below. Use a unique dedupe key for a new operation. Reusing a key with
+optional `analyze`, or briefing `sessionDate`, described below. Use a unique dedupe key for a new operation. Reusing a key with
 the same kind, payload and attempt limit returns the existing job, including a
 completed or failed job; it does not reset it. Conflicting reuse is rejected.
 Inspect jobs using `npm run db:studio`; worker logs include job ID, status,
@@ -327,8 +327,8 @@ npm run jobs:enqueue -- announcements.pipeline manual-pipeline-ai-1 '{"analyze":
 as `disabled`, `up`, or `down`. Scheduler health means tick/enqueue operations
 work; individual failed pipelines remain visible in jobs and worker logs. The
 current schedule monitors the implemented announcement RSS source only. Separate
-news sources, price polling, daily briefings, and alert delivery are not added
-by this scheduler.
+news sources, price polling, closing summaries, and alert delivery are not added
+by this scheduler. Morning briefing generation is separately enabled below.
 
 ## Experimental free market data
 
@@ -514,6 +514,59 @@ stay retryable without a fake successful analysis; unsupported/missing movement
 sources fail the queued task explicitly. Source context is rechecked before
 saving output. No automatic price polling or scheduled AI budget is added here.
 
+## Morning briefing
+
+Morning reports assemble stored filings and existing pre-cutoff research without
+making a new AI call. Generate and read the report in your terminal:
+
+```sh
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run briefings:morning
+# Backfill a stored-data report for a specific covered trading date:
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run briefings:morning -- --date 2026-11-03 --json
+```
+
+The report has a fixed **08:45 IST cutoff**. Its overnight window starts at the
+previous covered session's close, including intervening weekends/holidays. If
+prior-session calendar coverage is missing, it explicitly uses a limited 24-hour
+fallback. Only active-universe NSE filings discovered, matched and filtered by
+the cutoff are eligible; publication time must also fall in the window. Undated
+filings are counted as excluded rather than assigned a made-up publication time.
+Research must have been saved by the cutoff under the current prompt version.
+Later filings, later processing and later model output do not leak into the
+report. Historical reconstruction uses current stock-universe membership, not a
+historical membership database.
+
+The report contains up to twenty filings from fifty recent candidates, ordered
+by existing research priority and publication time. A JSON watchlist excludes
+items classified IGNORE; unassessed filings are marked as needing review.
+Candidate/report limits and unavailable research remain visible. Stored research
+is unverified, and this report supplies no price prediction or buy/sell order.
+It does not invent a results calendar, global-market sentiment or external news:
+these sources are explicitly marked as not configured.
+
+Reports are immutable `daily_briefings` records keyed by kind/trading date/report
+version, with JSON, readable Markdown, source-window metadata and generation time.
+Retries and concurrent calls reuse the existing report. A manual backfill or
+delayed queued run after opening is labeled as generated late; it does not claim
+to have been delivered before the market opened. Generation before the cutoff,
+on a closed date, or for unknown calendar coverage fails explicitly. Sessions
+opening at/before 08:45 are not treated as supported pre-market briefings.
+
+For automatic generation, set `WORKER_SCHEDULER_ENABLED=true` and
+`WORKER_MORNING_BRIEFING_ENABLED=true` with a maintained calendar. The worker
+enqueues one `briefings.morning` job at/after 08:45 and before that day's first
+opening. Restarts in this pre-open window catch up once; restarts after opening
+do not create a new morning job. The job is independent of whether an announcement
+pipeline is busy. A scheduled job delayed past opening can still complete with
+the late-generation label. Generation does not wait for a fresh source request.
+
+Source collection is labeled unverified when no successful announcement pipeline
+was recorded before cutoff, or stale when that success was over 75 minutes old.
+A recent success establishes collection activity, not complete or real-time
+upstream coverage. No eligible stored filings does not prove that no developments
+occurred. The feature stores and displays the report through the CLI/Prisma
+Studio only; website/email delivery is separate work.
+
 ## Operational checks and restart recovery
 
 Inspect persisted job state independently of whether a worker is running:
@@ -634,6 +687,7 @@ Copy `.env.example` to `.env`; never commit `.env`. Next.js, worker scripts, and
 | `WORKER_SCHEDULER_TICK_MS` | `10000`, permitted range 1000–60000 |
 | `WORKER_SCHEDULER_AI_ENABLED` | `false`; scheduled research is separately opt-in |
 | `WORKER_SCHEDULER_AI_LIMIT` | `1`, range 1–20, per pipeline attempt |
+| `WORKER_MORNING_BRIEFING_ENABLED` | `false`; generate a stored 08:45 IST report when the scheduler is enabled |
 | `MARKET_CALENDAR_FILE` | Maintained calendar file required when scheduling is enabled |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose database initialization; unused when connecting to an existing database |
 
@@ -710,4 +764,4 @@ When implemented, ingestion must create a signal and its pending job in one tran
 The worker runs health checks and explicitly queued announcement/research jobs.
 Optional market-aware scheduling runs sequential announcement pipelines;
 persistent work stays outside Next.js request handlers. Additional sources,
-briefings and delivery are separate steps. Redis/BullMQ is deferred.
+closing summaries and delivery are separate steps. Redis/BullMQ is deferred.

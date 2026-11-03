@@ -24,6 +24,8 @@ import { syntheticSnapshot } from "./fixtures/market-snapshot";
 import type { MarketDataProvider } from "../src/lib/market-data/provider";
 import { detectStoredMovement, MOVEMENT_VERSION } from "../src/lib/market-data/detect";
 import { researchMovement } from "../src/lib/research/movement";
+import { generateMorningBriefing, scheduleMorningBriefing } from "../src/lib/briefings/morning";
+import { RESEARCH_PROMPT_VERSION } from "../src/lib/research/schema";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -53,7 +55,7 @@ afterAll(async () => {
   await engine?.close();
 });
 beforeEach(async () => {
-  await db.$executeRaw`TRUNCATE feed_items, instruments, announcements, signals, signal_evidence,
+  await db.$executeRaw`TRUNCATE daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
     analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback,
     performance_outcomes CASCADE`;
 });
@@ -91,6 +93,61 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  const briefingCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-08", holidays: [], specialSessions: [] });
+  async function briefingItems() {
+    await seedStarterUniverse(db);
+    const instrument = await db.instrument.findUniqueOrThrow({ where: { exchange_symbol: { exchange: "NSE", symbol: "TCS" } } });
+    const common = { source: NSE_SOURCE, instrumentId: instrument.id, matchStatus: "matched" as const, matchCheckedAt: new Date("2026-11-03T03:01:00Z"),
+      relevanceStatus: "keep" as const, relevanceReason: "POTENTIALLY_MATERIAL_CONTEXT", relevanceRuleVersion: RELEVANCE_RULE_VERSION, relevanceCheckedAt: new Date("2026-11-03T03:02:00Z"),
+      discoveredAt: new Date("2026-11-03T03:00:00Z"), publishedAt: new Date("2026-11-02T15:00:00Z") };
+    await db.feedItem.createMany({ data: [
+      { ...common, sourceId: "overnight", title: "TCS - Results", url: "https://example.com/results" },
+      { ...common, sourceId: "found-later", title: "TCS - Acquisition", url: "https://example.com/late", discoveredAt: new Date("2026-11-03T03:16:00Z") },
+      { ...common, sourceId: "future-publication", title: "TCS - Results", url: "https://example.com/future", publishedAt: new Date("2026-11-03T03:16:00Z") },
+      { ...common, sourceId: "processed-later", title: "TCS - Results", url: "https://example.com/processed", relevanceCheckedAt: new Date("2026-11-03T03:16:00Z") },
+      { ...common, sourceId: "undated", title: "TCS - Update", url: "https://example.com/undated", publishedAt: null },
+      { ...common, sourceId: "routine", title: "TCS - Trading Window Closure", url: "https://example.com/routine", relevanceStatus: "routine" },
+    ] });
+    const feed = await db.feedItem.findUniqueOrThrow({ where: { source_sourceId: { source: NSE_SOURCE, sourceId: "overnight" } } });
+    await db.feedResearch.createMany({ data: [
+      { feedItemId: feed.id, provider: "test", model: "test", promptVersion: RESEARCH_PROMPT_VERSION, inputHash: "before", inputSnapshot: {}, classification: "WATCH", summary: "Stored pre-cutoff research.", significance: "Review filing.", risks: [], uncertainties: [], evidence: [], createdAt: new Date("2026-11-03T03:10:00Z") },
+      { feedItemId: feed.id, provider: "test", model: "test", promptVersion: RESEARCH_PROMPT_VERSION, inputHash: "after", inputSnapshot: {}, classification: "INVESTIGATE", summary: "LATER INFORMATION MUST NOT APPEAR", significance: "Later", risks: [], uncertainties: [], evidence: [], createdAt: new Date("2026-11-03T03:16:00Z") },
+    ] });
+  }
+  it("builds an immutable morning report with no future filings or research leaking past cutoff", async () => {
+    await briefingItems();
+    const at = new Date("2026-11-03T03:16:00Z");
+    const results = await Promise.all([generateMorningBriefing(db, briefingCalendar, "2026-11-03", at), generateMorningBriefing(db, briefingCalendar, "2026-11-03", at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["existing", "generated"]);
+    expect(results[0].report.id).toBe(results[1].report.id);
+    const report = results[0].report;
+    expect(report.content).toMatchObject({ totalEligibleFilings: 1, undatedFilingsExcluded: 1, windowBasis: "previous_session_close", generatedAfterOpen: false,
+      coverage: { collectionStatus: "unverified", universeCount: 6 }, watchlist: [{ symbol: "TCS", classification: "WATCH" }] });
+    expect(report.markdown).toContain("Stored pre-cutoff research");
+    expect(report.markdown).not.toContain("LATER INFORMATION");
+    expect(await db.dailyBriefing.count()).toBe(1);
+    const later = await generateMorningBriefing(db, briefingCalendar, "2026-11-03", new Date("2026-11-03T10:00:00Z"));
+    expect(later.report.generatedAt).toEqual(report.generatedAt);
+    expect(later.report.markdown).toBe(report.markdown);
+    expect(await db.feedResearch.count()).toBe(2);
+  });
+  it("reports missing sources and late generation honestly without an AI call", async () => {
+    const result = await generateMorningBriefing(db, briefingCalendar, "2026-11-03", new Date("2026-11-03T10:00:00Z"));
+    expect(result.report.content).toMatchObject({ generatedAfterOpen: true, totalEligibleFilings: 0, coverage: { collectionStatus: "unverified", globalMarkets: "not_configured", earningsCalendar: "not_configured" } });
+    expect(result.report.markdown).toContain("does not establish that no market developments occurred");
+    expect(await db.analysis.count()).toBe(0);
+    expect(await db.feedResearch.count()).toBe(0);
+    await expect(generateMorningBriefing(db, briefingCalendar, "2026-11-04", new Date("2026-11-04T03:14:00Z"))).rejects.toThrow("BRIEFING_NOT_DUE");
+  });
+  it("schedules one briefing independently of an active announcement pipeline", async () => {
+    await enqueueJob(db, { kind: "announcements.pipeline", dedupeKey: "busy-pipeline" });
+    const at = new Date("2026-11-03T03:15:00Z");
+    const results = await Promise.all([scheduleMorningBriefing(db, briefingCalendar, at), scheduleMorningBriefing(db, briefingCalendar, at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["already_scheduled", "enqueued"]);
+    expect(await db.job.count({ where: { kind: "briefings.morning" } })).toBe(1);
+    expect((await scheduleMorningBriefing(db, briefingCalendar, new Date("2026-11-03T03:16:00Z"))).status).toBe("already_scheduled");
+    expect(await scheduleMorningBriefing(db, briefingCalendar, new Date("2026-11-03T03:45:00Z"))).toMatchObject({ reason: "PREMARKET_WINDOW_CLOSED" });
+  });
   async function linkedMovement() {
     await movementQuotes();
     const result = await detectStoredMovement(db, movementCalendar, { exchange: "NSE", symbol: "TCS" }, "yahoo-experimental", new Date("2026-11-03T04:30:00Z"));
