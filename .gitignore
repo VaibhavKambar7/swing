@@ -52,3 +52,6 @@ coverage/
 
 # Generated Prisma Client
 /src/generated/prisma/
+
+# Local exchange calendar configuration (maintained separately from source).
+/config/market-calendar.local.json

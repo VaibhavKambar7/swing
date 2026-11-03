@@ -25,7 +25,8 @@
     "announcements:filter": "tsx scripts/filter-announcements.ts",
     "announcements:check": "node --use-env-proxy --import tsx scripts/ingest-announcements.ts --dry-run",
     "announcements:analyze": "node --use-env-proxy --import tsx scripts/analyze-announcements.ts",
-    "jobs:enqueue": "tsx scripts/enqueue-job.ts"
+    "jobs:enqueue": "tsx scripts/enqueue-job.ts",
+    "market:check": "tsx scripts/check-market.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

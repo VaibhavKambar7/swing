@@ -270,6 +270,50 @@ deduplication and research uniqueness still apply, but provider calls can be
 repeated. The runner never promises exactly-once API calls. Job chaining, market
 calendars, and automatic schedules are separate subsequent steps.
 
+## Indian market calendar
+
+The calendar engine describes NSE equity regular sessions in `Asia/Kolkata`:
+09:15 inclusive to 15:30 exclusive, Monday–Friday except configured holidays.
+Pre-open and closing auctions are outside this regular-session definition.
+Explicit special sessions override holidays/weekends; empty special-session
+windows close a day. Multiple ordered, non-overlapping sessions are supported.
+Calendar calculations do not depend on the machine's timezone.
+
+Provide a maintained local JSON file through `MARKET_CALENDAR_FILE` or the
+check command's `--file` argument. There is no default official holiday list.
+`config/market-calendar.example.json` is an **illustrative synthetic template**,
+not actual exchange dates. Replace its dates, source, coverage and entries using
+the official NSE equity *trading* calendar and subsequent special-session notices
+before operational use; settlement/bank holidays are not interchangeable.
+You can keep your maintained file at the ignored
+`config/market-calendar.local.json`. In the file:
+
+- `source` records the official calendar/notices used and their update date.
+- `coverageStart` / `coverageEnd` specify an inclusive date range in YYYY-MM-DD.
+- `holidays` contains `{ "date": "YYYY-MM-DD", "name": "..." }` entries.
+- `specialSessions` contains a date, name, and `sessions` array of
+  `{ "open": "HH:MM", "close": "HH:MM" }` IST windows. Use `[]` for a closure.
+
+Dates outside coverage are unknown, never assumed open or closed. Invalid dates,
+duplicate definitions, reversed/overlapping session windows, and excessive
+coverage are rejected. Holiday/special-session definitions must lie inside
+coverage. A special-session override on a holiday is intentional and allowed.
+The engine finds the next opening only inside known coverage and reports when
+coverage is exhausted. It does not fetch calendar updates automatically.
+
+```sh
+# Illustrative code check only — uses synthetic calendar entries:
+npm run market:check -- --file config/market-calendar.example.json --at 2026-11-03T09:15:00+05:30
+# Operational use, after providing your maintained calendar:
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run market:check
+```
+
+`--at` accepts an ISO timestamp with seconds and an explicit `Z` or numeric UTC
+offset. Output includes the IST date, day kind, session phase, current/next session
+in UTC and IST, source, and coverage. Missing configuration, invalid files, or an
+unknown current date produce a failing exit code. This is a standalone engine;
+it does not yet schedule jobs or restrict explicitly queued/manual operations.
+
 ## Health checks
 
 | Endpoint / command | Meaning |
