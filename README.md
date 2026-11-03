@@ -242,7 +242,7 @@ npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
 Supported kinds are `database.check`, `announcements.fetch`,
 `announcements.match`, `announcements.filter`, `announcements.analyze`, and
 `announcements.pipeline`, `movements.research`, `briefings.morning`, and
-`briefings.closing`. Payloads must be empty except
+`briefings.closing`, and `briefings.reassess`. Payloads must be empty except
 analysis `limit`, pipeline `analyze`/`analysisLimit`, or movement `signalId` and
 optional `analyze`, or briefing `sessionDate`, described below. Use a unique dedupe key for a new operation. Reusing a key with
 the same kind, payload and attempt limit returns the existing job, including a
@@ -329,7 +329,7 @@ as `disabled`, `up`, or `down`. Scheduler health means tick/enqueue operations
 work; individual failed pipelines remain visible in jobs and worker logs. The
 current schedule monitors the implemented announcement RSS source only. Separate
 news sources, price polling, and alert delivery are not added by this scheduler.
-Morning and closing report generation are separately enabled below.
+Morning/closing reports and post-open reassessment are separately enabled below.
 
 ## Experimental free market data
 
@@ -623,6 +623,60 @@ current day's summary were missed, the planner favors the current day's due
 summary. Explicit queueing uses `{ "sessionDate": "YYYY-MM-DD" }` and the normal
 job runner. Website/email delivery remains separate.
 
+## Post-open watchlist reassessment
+
+Reassessment reads a stored premarket watchlist and stored quote observations;
+it makes no source requests, AI calls, trades or deliveries:
+
+```sh
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run briefings:reassess
+# Or explicitly enqueue with a date while its window is active:
+npm run jobs:enqueue -- briefings.reassess manual-post-open-1 '{"sessionDate":"2026-11-03"}'
+```
+
+For regular sessions the supported evaluation window is **09:20 inclusive to
+09:30 exclusive IST**. Special sessions use five to fifteen minutes after their
+first opening, capped by that session's close. Very short, closed, unknown or
+expired sessions are not treated as valid reassessment windows. The matching
+morning-v1 report must exist and have been generated before opening, with
+a pre-open information cutoff. A report generated after opening is not passed
+off as a genuinely premarket watchlist.
+
+Candidates are deduplicated from that report's watchlist and restricted to
+currently active NSE universe equities. Inactive/unavailable symbols are reported
+as skipped. The latest known Yahoo snapshot is used without falling back from
+a missing quote. Source and retrieval timestamps must be known by evaluation,
+with no clock skew; current quote age must be at most two minutes and its source
+time at least four minutes after opening. The opening reference is the earliest
+reliable stored quote in the first minute after opening, fresh at retrieval. It
+is an *observed opening reference*, not a verified official exchange opening.
+Missing or incompatible data yields `PENDING_DATA` with a reason.
+
+With suitable observations, the initial rules yield `CAUTION` for a rise or fall
+of at least 5% since that opening reference; smaller moves yield `WATCH` for
+further research. Decimal comparisons occur before rounding displayed percentages
+to eight places. No buy/sell or BUY CANDIDATE instruction is emitted. A verified
+previous close, valuation, liquidity baseline and entry/risk plan are unavailable;
+the overnight gap remains null rather than computed from an unverified daily bar.
+Provider delay remains unknown even for recent source timestamps.
+
+Results are immutable `post_open_assessments` linked to the morning report and
+stock, including rule version, snapshot IDs, timestamp metadata and limitations.
+Repeating unchanged inputs/status returns the existing assessment. A new quote or
+status change, including a quote becoming stale, creates a new revision while
+preserving earlier results. Wall-clock age alone does not create duplicate rows
+while the rule result is unchanged. Returned `assessedAt` identifies when a reused
+record was originally evaluated; `evaluatedAt` identifies the current request.
+
+To schedule checks, set `WORKER_SCHEDULER_ENABLED=true` and
+`WORKER_POSTOPEN_ENABLED=true` with a maintained calendar and a real morning report.
+One deduplicated job per minute can run in the supported window (up to ten slots
+for a regular session), allowing missing data to be reassessed as observations
+arrive. Retries after the window closes fail explicitly rather than pretending
+to be a timely opening assessment. There is no automatic price importer in this
+feature; fresh stored quotes must be supplied separately. Scheduling alone does
+not resolve network access or create a verified price feed.
+
 ## Operational checks and restart recovery
 
 Inspect persisted job state independently of whether a worker is running:
@@ -745,6 +799,7 @@ Copy `.env.example` to `.env`; never commit `.env`. Next.js, worker scripts, and
 | `WORKER_SCHEDULER_AI_LIMIT` | `1`, range 1–20, per pipeline attempt |
 | `WORKER_MORNING_BRIEFING_ENABLED` | `false`; generate a stored 08:45 IST report when the scheduler is enabled |
 | `WORKER_CLOSING_BRIEFING_ENABLED` | `false`; generate a preliminary end-of-session summary when scheduling is enabled |
+| `WORKER_POSTOPEN_ENABLED` | `false`; reassess the morning watchlist in the 5–15 minute post-open window |
 | `MARKET_CALENDAR_FILE` | Maintained calendar file required when scheduling is enabled |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose database initialization; unused when connecting to an existing database |
 

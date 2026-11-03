@@ -171,6 +171,7 @@ model Instrument {
   performanceOutcomes      PerformanceOutcome[] @relation("performance_outcomes_benchmark_id_instruments_id_fk")
   signals                  Signal[]             @relation("signals_instrument_id_instruments_id_fk")
   marketSnapshots          MarketSnapshotRecord[]
+  postOpenAssessments      PostOpenAssessment[]
 
   @@unique([exchange, symbol], map: "instruments_exchange_symbol_unique")
   @@unique([kiteToken], map: "instruments_kite_token_unique")
@@ -404,10 +405,30 @@ model DailyBriefing {
   generatedAt    DateTime @default(now()) @map("generated_at") @db.Timestamptz(6)
   content        Json     @db.JsonB
   markdown       String
+  postOpenAssessments PostOpenAssessment[]
 
   @@unique([kind, sessionDate, reportVersion], map: "daily_briefings_session_unique")
   @@index([cutoffAt], map: "daily_briefings_cutoff_idx")
   @@map("daily_briefings")
+}
+
+model PostOpenAssessment {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionDate       DateTime @map("session_date") @db.Date
+  morningBriefingId String   @map("morning_briefing_id") @db.Uuid
+  instrumentId      String   @map("instrument_id") @db.Uuid
+  rulesVersion      String   @map("rules_version")
+  inputHash         String   @map("input_hash")
+  status            String
+  reason            String
+  assessedAt        DateTime @map("assessed_at") @db.Timestamptz(6)
+  content           Json     @db.JsonB
+  morningBriefing   DailyBriefing @relation(fields: [morningBriefingId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "post_open_morning_fk")
+  instrument        Instrument @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "post_open_instrument_fk")
+
+  @@unique([morningBriefingId, instrumentId, rulesVersion, inputHash], map: "post_open_input_unique")
+  @@index([sessionDate, instrumentId, assessedAt], map: "post_open_assessed_idx")
+  @@map("post_open_assessments")
 }
 
 model PollingCheckpoint {

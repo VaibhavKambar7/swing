@@ -28,6 +28,7 @@ import { generateMorningBriefing, scheduleMorningBriefing } from "../src/lib/bri
 import { RESEARCH_PROMPT_VERSION } from "../src/lib/research/schema";
 import { generateClosingBriefing, scheduleClosingBriefing } from "../src/lib/briefings/closing";
 import { MOVEMENT_RESEARCH_VERSION } from "../src/lib/research/movement";
+import { reassessMorningWatchlist, schedulePostOpen } from "../src/lib/briefings/post-open";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -95,6 +96,65 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  const reassessmentCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-04", holidays: [], specialSessions: [] });
+  async function reassessmentMorning() {
+    await seedStarterUniverse(db);
+    const feed = await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "reassessment-fixture", title: "TCS - Results", url: "https://example.com/reassess" } });
+    return db.dailyBriefing.create({ data: { kind: "morning", sessionDate: new Date("2026-11-03"), reportVersion: "morning-v1", windowStart: new Date("2026-11-02T10:00:00Z"), cutoffAt: new Date("2026-11-03T03:15:00Z"), generatedAt: new Date("2026-11-03T03:16:00Z"), content: { watchlist: [{ symbol: "TCS", feedItemId: feed.id }, { symbol: "TCS", feedItemId: feed.id }] }, markdown: "Synthetic premarket watchlist" } });
+  }
+  async function postOpenQuote(price: string, quoteTime: string, retrievedAt: string) {
+    const snapshot = syntheticSnapshot(); snapshot.retrievedAt = retrievedAt;
+    snapshot.quote!.retrievedAt = retrievedAt; snapshot.quote!.marketTime = quoteTime; snapshot.quote!.price = price;
+    snapshot.quote!.ageSeconds = (Date.parse(retrievedAt) - Date.parse(quoteTime)) / 1000;
+    const result = await storeMarketSnapshot(db, snapshot);
+    // Synthetic as-of fixture; actual imports use their real recordedAt.
+    await db.marketSnapshotRecord.update({ where: { id: result.snapshotId }, data: { recordedAt: new Date(retrievedAt) } });
+    return result;
+  }
+  it("persists pending-to-caution/watch revisions and skips unchanged reassessments", async () => {
+    await reassessmentMorning();
+    const at = new Date("2026-11-03T03:50:10Z");
+    expect(await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", at)).toMatchObject({ pending: 1, inserted: 1 });
+    await postOpenQuote("100", "2026-11-03T03:45:20Z", "2026-11-03T03:45:30Z");
+    await postOpenQuote("105", "2026-11-03T03:50:00Z", "2026-11-03T03:50:05Z");
+    const ready = await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", at);
+    expect(ready).toMatchObject({ caution: 1, inserted: 1, assessments: [{ status: "CAUTION", reason: "RAPID_POST_OPEN_RISE", content: { overnightGapPct: null, action: "research_only", changeSinceObservedOpenPct: "5.00000000" } }] });
+    expect(await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T03:50:15Z"))).toMatchObject({ inserted: 0, caution: 1 });
+    expect(await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T03:53:00Z"))).toMatchObject({ pending: 1, inserted: 1 });
+    await postOpenQuote("101", "2026-11-03T03:53:00Z", "2026-11-03T03:53:05Z");
+    expect(await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T03:53:10Z"))).toMatchObject({ watch: 1, inserted: 1 });
+    expect(await db.postOpenAssessment.count()).toBe(4);
+    expect(await db.analysis.count()).toBe(0);
+  });
+  it("does not reuse an earlier quote when the latest known retrieval is missing data", async () => {
+    await reassessmentMorning();
+    await postOpenQuote("100", "2026-11-03T03:45:20Z", "2026-11-03T03:45:30Z");
+    await postOpenQuote("101", "2026-11-03T03:50:00Z", "2026-11-03T03:50:05Z");
+    const missing = syntheticSnapshot(); missing.quote = null; missing.retrievedAt = "2026-11-03T03:51:00.000Z";
+    const row = await storeMarketSnapshot(db, missing);
+    await db.marketSnapshotRecord.update({ where: { id: row.snapshotId }, data: { recordedAt: new Date(missing.retrievedAt) } });
+    expect(await reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T03:51:10Z"))).toMatchObject({ pending: 1, assessments: [{ reason: "CURRENT_QUOTE_MISSING" }] });
+  });
+  it("requires a genuinely premarket report and rejects early/late evaluation", async () => {
+    const at = new Date("2026-11-03T03:50:00Z");
+    await expect(reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", at)).rejects.toThrow("MORNING_BRIEFING_REQUIRED");
+    const morning = await reassessmentMorning();
+    await db.dailyBriefing.update({ where: { id: morning.id }, data: { generatedAt: new Date("2026-11-03T03:46:00Z") } });
+    await expect(reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", at)).rejects.toThrow("MORNING_REPORT_NOT_PREMARKET");
+    await db.dailyBriefing.update({ where: { id: morning.id }, data: { generatedAt: new Date("2026-11-03T03:45:00Z") } });
+    await expect(reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", at)).rejects.toThrow("MORNING_REPORT_NOT_PREMARKET");
+    await expect(reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T03:49:59Z"))).rejects.toThrow("BRIEFING_NOT_DUE");
+    await expect(reassessMorningWatchlist(db, reassessmentCalendar, "2026-11-03", new Date("2026-11-03T04:00:00Z"))).rejects.toThrow("REASSESSMENT_WINDOW_CLOSED");
+    expect(await db.postOpenAssessment.count()).toBe(0);
+  });
+  it("deduplicates scheduler replicas per minute and allows later retry slots for pending data", async () => {
+    const at = new Date("2026-11-03T03:50:00Z");
+    const results = await Promise.all([schedulePostOpen(db, reassessmentCalendar, at), schedulePostOpen(db, reassessmentCalendar, at)]);
+    expect(results.map((entry) => entry.status).sort()).toEqual(["already_scheduled", "enqueued"]);
+    expect((await schedulePostOpen(db, reassessmentCalendar, new Date("2026-11-03T03:51:00Z"))).status).toBe("enqueued");
+    expect((await schedulePostOpen(db, reassessmentCalendar, new Date("2026-11-03T04:00:00Z"))).status).toBe("skipped");
+    expect(await db.job.count({ where: { kind: "briefings.reassess" } })).toBe(2);
+  });
   const closingCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-04", holidays: [], specialSessions: [] });
   async function closingItems() {
     await seedStarterUniverse(db);
