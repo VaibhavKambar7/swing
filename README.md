@@ -69,6 +69,37 @@ fixtures and Prisma/PGlite integration tests cover storage and duplicate handlin
 without relying on external network access. A feed is only a rolling window and
 does not guarantee complete historical announcement coverage.
 
+### Feed checks and saved-file imports
+
+Check the feed without opening a database connection or storing any entries:
+
+```sh
+npm run announcements:check
+```
+
+Set `NSE_ANNOUNCEMENTS_URL` in your local environment to override the endpoint
+for the same NSE RSS source. It must use HTTPS with no embedded credentials or
+fragment. Network policy still applies; this setting does not grant access. Do
+not point it at a different publisher: source IDs remain namespaced as NSE.
+
+To validate a previously saved RSS response without network access:
+
+```sh
+npm run announcements:check -- --file /path/to/saved-nse-feed.xml
+# Parser/CLI demonstration using explicitly synthetic data; no database writes:
+npm run announcements:check -- --file tests/fixtures/announcements.xml
+```
+
+To import a saved real NSE response, use `npm run announcements:fetch -- --file
+/path/to/saved-nse-feed.xml`. This writes to the same deduplicated inbox as a live
+fetch. Do not import the synthetic fixture into a real research database.
+File input is explicit: a failed live request never falls back to fixture data.
+Both modes enforce a 5 MB input limit. Check output reports valid/skipped counts,
+missing publication dates, whether input was live or a file, and that no database
+writes occurred. An empty valid feed reports zero received, which does not prove
+that live announcements are available. Failure output contains a safe stage/code
+and HTTP status when available, without response bodies or connection secrets.
+
 ## Stock universe and announcement matching
 
 ```sh

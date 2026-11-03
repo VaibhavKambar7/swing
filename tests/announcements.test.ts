@@ -45,4 +45,26 @@ describe("announcement RSS", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("x".repeat(5 * 1024 * 1024 + 1)));
     await expect(fetchAnnouncements(fetcher)).rejects.toThrow("exceeds 5 MB");
   });
+  it("uses a configured HTTPS endpoint for the same announcement source", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(rss(item)));
+    await fetchAnnouncements(fetcher, "https://example.com/nse-feed.xml");
+    expect(fetcher).toHaveBeenCalledWith("https://example.com/nse-feed.xml", expect.any(Object));
+  });
+  it.each(["http://example.com/feed", "file:///etc/passwd", "https://user:secret@example.com/feed", "https://example.com/feed#fragment", ""])("rejects an invalid configured endpoint before fetching", async (url) => {
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(fetchAnnouncements(fetcher, url)).rejects.toMatchObject({ code: "invalid_url" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("keeps HTTP status diagnostics separate from response bodies", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("secret response body", { status: 429 }));
+    await expect(fetchAnnouncements(fetcher)).rejects.toMatchObject({ code: "http_error", httpStatus: 429 });
+  });
+  it("sanitizes network failures and broken response streams", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("proxy https://user:secret@example.com"));
+    await expect(fetchAnnouncements(fetcher)).rejects.toMatchObject({ code: "network_error" });
+    await expect(fetchAnnouncements(fetcher)).rejects.not.toThrow("secret");
+    const broken = new ReadableStream({ start(controller) { controller.error(new Error("secret stream details")); } });
+    fetcher.mockResolvedValue(new Response(broken));
+    await expect(fetchAnnouncements(fetcher)).rejects.toMatchObject({ code: "network_error" });
+  });
 });

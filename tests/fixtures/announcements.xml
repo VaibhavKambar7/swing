@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test data only. Not a live announcement or investment information. -->
+<rss version="2.0"><channel><title>Synthetic announcement fixture</title>
+  <item>
+    <guid isPermaLink="false">synthetic-results-1</guid>
+    <title>Example Company Limited - Financial Results</title>
+    <link>https://example.com/synthetic-results</link>
+    <description>Synthetic quarterly results for local development.</description>
+    <pubDate>Tue, 03 Nov 2026 08:45:00 +0530</pubDate>
+  </item>
+  <item>
+    <guid isPermaLink="false">synthetic-update-2</guid>
+    <title>Another Example Limited - Update</title>
+    <link>https://example.com/synthetic-update</link>
+  </item>
+</channel></rss>
