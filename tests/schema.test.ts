@@ -26,6 +26,8 @@ import { detectStoredMovement, MOVEMENT_VERSION } from "../src/lib/market-data/d
 import { researchMovement } from "../src/lib/research/movement";
 import { generateMorningBriefing, scheduleMorningBriefing } from "../src/lib/briefings/morning";
 import { RESEARCH_PROMPT_VERSION } from "../src/lib/research/schema";
+import { generateClosingBriefing, scheduleClosingBriefing } from "../src/lib/briefings/closing";
+import { MOVEMENT_RESEARCH_VERSION } from "../src/lib/research/movement";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -93,6 +95,63 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  const closingCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-04", holidays: [], specialSessions: [] });
+  async function closingItems() {
+    await seedStarterUniverse(db);
+    const snapshot = syntheticSnapshot(); snapshot.retrievedAt = "2026-11-03T10:00:00.000Z";
+    snapshot.quote!.retrievedAt = snapshot.retrievedAt; snapshot.quote!.marketTime = "2026-11-03T09:59:00.000Z";
+    snapshot.candles[0].sessionDate = "2026-11-03"; snapshot.candles[0].timestamp = "2026-11-03T03:45:00.000Z"; snapshot.candles[0].volume = "12345";
+    const stored = await storeMarketSnapshot(db, snapshot);
+    // Backdate recording only to simulate an observation known before test cutoff.
+    await db.marketSnapshotRecord.update({ where: { id: stored.snapshotId }, data: { recordedAt: new Date(snapshot.retrievedAt) } });
+    const instrument = await db.instrument.findUniqueOrThrow({ where: { exchange_symbol: { exchange: "NSE", symbol: "TCS" } } });
+    await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "closing-filing", title: "TCS - Results", url: "https://example.com/closing", instrumentId: instrument.id,
+      publishedAt: new Date("2026-11-03T09:00:00Z"), discoveredAt: new Date("2026-11-03T09:01:00Z"), matchStatus: "matched", matchCheckedAt: new Date("2026-11-03T09:02:00Z"),
+      relevanceStatus: "keep", relevanceReason: "POTENTIALLY_MATERIAL_CONTEXT", relevanceRuleVersion: RELEVANCE_RULE_VERSION, relevanceCheckedAt: new Date("2026-11-03T09:03:00Z") } });
+    const signal = await db.signal.create({ data: { instrumentId: instrument.id, origin: "movement", dedupeKey: "closing-trigger", detectorVersion: MOVEMENT_VERSION,
+      observedAt: new Date("2026-11-03T09:50:00Z"), windowStart: new Date("2026-11-03T09:45:00Z"), price: "103", referencePrice: "100", priceChangePct: "3", createdAt: new Date("2026-11-03T09:51:00Z") } });
+    await db.analysis.createMany({ data: [
+      { signalId: signal.id, provider: "test", model: "test", promptVersion: MOVEMENT_RESEARCH_VERSION, summary: "Known before cutoff", createdAt: new Date("2026-11-03T09:52:00Z") },
+      { signalId: signal.id, provider: "test", model: "test", promptVersion: MOVEMENT_RESEARCH_VERSION, summary: "FUTURE RESEARCH", createdAt: new Date("2026-11-03T10:16:00Z") },
+    ] });
+    const later = structuredClone(snapshot); later.retrievedAt = "2026-11-03T10:16:00.000Z";
+    later.quote!.retrievedAt = later.retrievedAt; later.quote!.ageSeconds = 1020; later.quote!.freshness = "stale"; later.quote!.price = "999";
+    await storeMarketSnapshot(db, later);
+    return snapshot;
+  }
+  it("stores a preliminary closing report without leaking later observations or research", async () => {
+    const snapshot = await closingItems(); const at = new Date("2026-11-03T10:15:00Z");
+    const results = await Promise.all([generateClosingBriefing(db, closingCalendar, "2026-11-03", at), generateClosingBriefing(db, closingCalendar, "2026-11-03", at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["existing", "generated"]);
+    const report = results[0].report;
+    expect(report.content).toMatchObject({ status: "preliminary", coverage: { universeCount: 6, suitableCloseObservations: 1, indices: "unavailable", dailyReturnRankings: "unavailable", unusualVolume: "not_computed" },
+      movements: [{ priceChangePct: "3", methodology: "recorded 5–6 minute trigger, not a daily return", research: { summary: "Known before cutoff", catalystVerified: false } }] });
+    expect(report.markdown).toContain(snapshot.quote!.price);
+    expect(report.markdown).not.toContain("FUTURE RESEARCH");
+    expect(report.markdown).not.toContain("₹999");
+    expect(report.markdown).toContain("PRELIMINARY");
+    expect(await db.dailyBriefing.count()).toBe(1);
+    expect((await generateClosingBriefing(db, closingCalendar, "2026-11-03", new Date("2026-11-03T11:00:00Z"))).report.id).toBe(report.id);
+    await generateMorningBriefing(db, closingCalendar, "2026-11-03", at);
+    expect(await db.dailyBriefing.count()).toBe(2);
+  });
+  it("does not substitute an older quote when the latest known retrieval has none", async () => {
+    const snapshot = await closingItems(); const missing = { ...snapshot, retrievedAt: "2026-11-03T10:10:00.000Z", quote: null };
+    const stored = await storeMarketSnapshot(db, missing);
+    await db.marketSnapshotRecord.update({ where: { id: stored.snapshotId }, data: { recordedAt: new Date(missing.retrievedAt) } });
+    const result = await generateClosingBriefing(db, closingCalendar, "2026-11-03", new Date("2026-11-03T10:15:00Z"));
+    expect(result.report.content).toMatchObject({ coverage: { suitableCloseObservations: 0 } });
+    expect(result.report.markdown).not.toContain(`₹${snapshot.quote!.price}`);
+  });
+  it("queues a closing report once, including while ingestion is busy, and refuses premature generation", async () => {
+    await enqueueJob(db, { kind: "announcements.pipeline", dedupeKey: "closing-busy" });
+    const at = new Date("2026-11-03T10:15:00Z");
+    const results = await Promise.all([scheduleClosingBriefing(db, closingCalendar, at), scheduleClosingBriefing(db, closingCalendar, at)]);
+    expect(results.map((result) => result.status).sort()).toEqual(["already_scheduled", "enqueued"]);
+    expect(await db.job.count({ where: { kind: "briefings.closing" } })).toBe(1);
+    await expect(generateClosingBriefing(db, closingCalendar, "2026-11-03", new Date("2026-11-03T10:14:59Z"))).rejects.toThrow("BRIEFING_NOT_DUE");
+    expect(await db.dailyBriefing.count()).toBe(0);
+  });
   const briefingCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-08", holidays: [], specialSessions: [] });
   async function briefingItems() {
     await seedStarterUniverse(db);

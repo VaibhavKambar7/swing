@@ -11,6 +11,7 @@ import { CalendarError } from "../lib/market/calendar";
 import { scheduleAnnouncementRun } from "../lib/market/scheduler";
 import { getJobStatus, publicJobKind } from "../lib/jobs/status";
 import { scheduleMorningBriefing } from "../lib/briefings/morning";
+import { scheduleClosingBriefing } from "../lib/briefings/closing";
 
 const env = getEnv();
 const startedAt = new Date().toISOString();
@@ -55,12 +56,14 @@ function scheduleTick() {
     return Promise.all([
       scheduleAnnouncementRun(getDatabase(), calendar, { analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT }, now),
       env.WORKER_MORNING_BRIEFING_ENABLED ? scheduleMorningBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
+      env.WORKER_CLOSING_BRIEFING_ENABLED ? scheduleClosingBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
     ]);
-  }).then(([result, briefing]) => {
+  }).then(([result, briefing, closing]) => {
     schedulerUp = true;
     lastSchedulerTickAt = Date.now(); schedulerErrorCode = null;
     if (result.status === "enqueued") log("pipeline_scheduled", result);
     if (briefing.status === "enqueued") log("morning_briefing_scheduled", briefing);
+    if (closing.status === "enqueued") log("closing_briefing_scheduled", closing);
   }).catch((error) => {
     schedulerUp = false;
     lastSchedulerTickAt = Date.now();

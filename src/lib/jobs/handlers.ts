@@ -14,8 +14,9 @@ import { researchMovement } from "../research/movement";
 import { generateMorningBriefing, BriefingError } from "../briefings/morning";
 import { loadMarketCalendar } from "../market/load-calendar";
 import { CalendarError } from "../market/calendar";
+import { generateClosingBriefing } from "../briefings/closing";
 
-export const JOB_KINDS = ["database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning"] as const;
+export const JOB_KINDS = ["database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing"] as const;
 const emptyPayload = z.object({}).strict();
 const analysisPayload = z.object({ limit: z.number().int().min(1).max(20).default(1) }).strict();
 const pipelinePayload = z.object({ analyze: z.boolean().default(false), analysisLimit: z.number().int().min(1).max(20).default(1) }).strict();
@@ -24,12 +25,24 @@ const briefingPayload = z.object({ sessionDate: z.string().regex(/^\d{4}-\d{2}-\
 
 export function validateJobPayload(kind: string, payload: unknown) {
   if (!(JOB_KINDS as readonly string[]).includes(kind)) throw new JobError("UNSUPPORTED_JOB_KIND", true);
-  const result = (kind === "briefings.morning" ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
+  const result = ((kind === "briefings.morning" || kind === "briefings.closing") ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
   if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
   return result.data;
 }
 
 export function createJobHandlers(db: PrismaClient, stages: PipelineStages = createPipelineStages(db)): JobHandlers {
+  const briefing = (generate: typeof generateMorningBriefing): JobHandler => async (job, signal) => {
+    const parsed = briefingPayload.safeParse(job.payload);
+    if (!parsed.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
+    signal.throwIfAborted();
+    try { await generate(db, await loadMarketCalendar(), parsed.data.sessionDate); }
+    catch (error) {
+      if (error instanceof CalendarError) throw new JobError(error.code, error.code === "INVALID_DATE");
+      if (error instanceof BriefingError) throw new JobError(error.code, error.code !== "BRIEFING_NOT_DUE");
+      throw error;
+    }
+    signal.throwIfAborted();
+  };
   const wrap = (kind: string, action: (payload: { limit?: number }) => Promise<unknown>): JobHandler => async (job, signal) => {
     const payload = validateJobPayload(kind, job.payload);
     signal.throwIfAborted();
@@ -43,18 +56,8 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     signal.throwIfAborted();
   };
   return {
-    "briefings.morning": async (job, signal) => {
-      const parsed = briefingPayload.safeParse(job.payload);
-      if (!parsed.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
-      signal.throwIfAborted();
-      try { await generateMorningBriefing(db, await loadMarketCalendar(), parsed.data.sessionDate); }
-      catch (error) {
-        if (error instanceof CalendarError) throw new JobError(error.code, error.code === "INVALID_DATE");
-        if (error instanceof BriefingError) throw new JobError(error.code, error.code !== "BRIEFING_NOT_DUE");
-        throw error;
-      }
-      signal.throwIfAborted();
-    },
+    "briefings.morning": briefing(generateMorningBriefing),
+    "briefings.closing": briefing(generateClosingBriefing),
     "movements.research": async (job, signal) => {
       const result = movementPayload.safeParse(job.payload);
       if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);

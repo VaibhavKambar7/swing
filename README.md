@@ -241,7 +241,8 @@ npm run jobs:enqueue -- announcements.analyze manual-research-1 '{"limit":1}'
 
 Supported kinds are `database.check`, `announcements.fetch`,
 `announcements.match`, `announcements.filter`, `announcements.analyze`, and
-`announcements.pipeline`, `movements.research`, and `briefings.morning`. Payloads must be empty except
+`announcements.pipeline`, `movements.research`, `briefings.morning`, and
+`briefings.closing`. Payloads must be empty except
 analysis `limit`, pipeline `analyze`/`analysisLimit`, or movement `signalId` and
 optional `analyze`, or briefing `sessionDate`, described below. Use a unique dedupe key for a new operation. Reusing a key with
 the same kind, payload and attempt limit returns the existing job, including a
@@ -327,8 +328,8 @@ npm run jobs:enqueue -- announcements.pipeline manual-pipeline-ai-1 '{"analyze":
 as `disabled`, `up`, or `down`. Scheduler health means tick/enqueue operations
 work; individual failed pipelines remain visible in jobs and worker logs. The
 current schedule monitors the implemented announcement RSS source only. Separate
-news sources, price polling, closing summaries, and alert delivery are not added
-by this scheduler. Morning briefing generation is separately enabled below.
+news sources, price polling, and alert delivery are not added by this scheduler.
+Morning and closing report generation are separately enabled below.
 
 ## Experimental free market data
 
@@ -567,6 +568,61 @@ upstream coverage. No eligible stored filings does not prove that no development
 occurred. The feature stores and displays the report through the CLI/Prisma
 Studio only; website/email delivery is separate work.
 
+## Preliminary market summary
+
+The closing report assembles stored prices, movement triggers, company filings,
+and existing research without fetching data or calling AI:
+
+```sh
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run briefings:closing
+MARKET_CALENDAR_FILE=config/market-calendar.local.json npm run briefings:closing -- --date 2026-11-03 --json
+```
+
+Regular-session cutoff is **15:45 IST**. For special sessions it is the later
+of 15:45 and fifteen minutes after the final close, including a cutoff crossing
+midnight. Closed dates and unknown calendar coverage are not invented as trading
+days. Generation before the cutoff fails; manual historical generation remains
+bounded by the original information cutoff. The calendar date on the report is
+the trading session date, even when its cutoff is on the next date.
+
+Every report is explicitly **preliminary**. The current provider cannot establish
+official closing prices or final daily candles. For each of up to one hundred
+tracked stocks, it inspects the latest Yahoo retrieval known by cutoff, including
+its database recording time. A suitable near-close price must be in the final
+five minutes of the last trading session; it remains an unverified observation.
+Missing, out-of-window or clock-skewed quotes stay unavailable, and a missing
+latest quote does not cause a fallback to an older one. Quote ages are measured
+at cutoff, not advertised as fresh live prices. Supplied daily volumes retain
+their unknown-completion label; no unusual-volume ratio is invented.
+
+The summary lists up to fifty recorded intraday movement triggers and twenty
+same-day company filings. Trigger percentages describe their original 5–6-minute
+windows, **not daily gainers or losers**. Filings include pre-market disclosures
+from that IST calendar date; late publication/discovery/filtering, late price
+imports, and research saved after cutoff are excluded. Existing model summaries
+remain unverified and announcements are possible context, not established causes.
+The JSON research watchlist excludes IGNORE classifications. Nifty/Sensex
+performance, verified daily-return rankings, external news and unusual-volume
+analysis remain explicitly unavailable. Report limits and missing next-session
+calendar coverage remain visible rather than implying market-wide completeness.
+
+Reports share the immutable `daily_briefings` store under kind `closing`, with
+their own version/date key, separate from morning reports. Concurrent generation,
+retries and CLI reads reuse the stored report instead of creating duplicates or
+silently upgrading it with later data. A new verified/final data methodology would
+need an explicit new report version; running this command later does not make a
+preliminary report final.
+
+To schedule, enable `WORKER_SCHEDULER_ENABLED=true` and
+`WORKER_CLOSING_BRIEFING_ENABLED=true` with a maintained calendar. The worker
+enqueues one `briefings.closing` job when due, independent of an active ingestion
+pipeline. Restarts can catch up later on the cutoff's local date; they do not
+replay a backlog of earlier dates. A cross-midnight special-session report keeps
+the previous trading date. If both an earlier cross-midnight report and the
+current day's summary were missed, the planner favors the current day's due
+summary. Explicit queueing uses `{ "sessionDate": "YYYY-MM-DD" }` and the normal
+job runner. Website/email delivery remains separate.
+
 ## Operational checks and restart recovery
 
 Inspect persisted job state independently of whether a worker is running:
@@ -688,6 +744,7 @@ Copy `.env.example` to `.env`; never commit `.env`. Next.js, worker scripts, and
 | `WORKER_SCHEDULER_AI_ENABLED` | `false`; scheduled research is separately opt-in |
 | `WORKER_SCHEDULER_AI_LIMIT` | `1`, range 1–20, per pipeline attempt |
 | `WORKER_MORNING_BRIEFING_ENABLED` | `false`; generate a stored 08:45 IST report when the scheduler is enabled |
+| `WORKER_CLOSING_BRIEFING_ENABLED` | `false`; generate a preliminary end-of-session summary when scheduling is enabled |
 | `MARKET_CALENDAR_FILE` | Maintained calendar file required when scheduling is enabled |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | Compose database initialization; unused when connecting to an existing database |
 
@@ -764,4 +821,4 @@ When implemented, ingestion must create a signal and its pending job in one tran
 The worker runs health checks and explicitly queued announcement/research jobs.
 Optional market-aware scheduling runs sequential announcement pipelines;
 persistent work stays outside Next.js request handlers. Additional sources,
-closing summaries and delivery are separate steps. Redis/BullMQ is deferred.
+report delivery is a separate step. Redis/BullMQ is deferred.

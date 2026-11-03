@@ -32,7 +32,8 @@
     "prices:import": "node --use-env-proxy --import tsx scripts/import-prices.ts",
     "prices:detect": "tsx scripts/detect-movements.ts",
     "movements:research": "node --use-env-proxy --import tsx scripts/research-movement.ts",
-    "briefings:morning": "tsx scripts/morning-briefing.ts"
+    "briefings:morning": "tsx scripts/morning-briefing.ts",
+    "briefings:closing": "tsx scripts/closing-briefing.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",
