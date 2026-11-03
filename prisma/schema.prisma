@@ -110,12 +110,39 @@ model FeedItem {
   relevanceCheckedAt   DateTime?           @map("relevance_checked_at") @db.Timestamptz(6)
   instrumentId         String?             @map("instrument_id") @db.Uuid
   instrument           Instrument?         @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
+  research             FeedResearch[]
 
   @@unique([source, sourceId], map: "feed_items_source_unique")
   @@index([discoveredAt], map: "feed_items_discovered_idx")
   @@index([instrumentId], map: "feed_items_instrument_idx")
   @@index([matchStatus, relevanceStatus, id], map: "feed_items_relevance_idx")
   @@map("feed_items")
+}
+
+// Announcement-only research remains attached to the raw input; no invented
+// publication date or trading signal is required to preserve a useful summary.
+model FeedResearch {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedItemId    String         @map("feed_item_id") @db.Uuid
+  provider      String
+  model         String
+  promptVersion String         @map("prompt_version")
+  inputHash     String         @map("input_hash")
+  inputSnapshot Json           @map("input_snapshot") @db.JsonB
+  classification Classification
+  summary       String
+  significance  String
+  risks         Json           @db.JsonB
+  uncertainties Json           @db.JsonB
+  evidence      Json           @db.JsonB
+  inputTokens   Int?           @map("input_tokens")
+  outputTokens  Int?           @map("output_tokens")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  feedItem      FeedItem       @relation(fields: [feedItemId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_research_item_fk")
+
+  @@unique([feedItemId, provider, model, promptVersion, inputHash], map: "feed_research_input_unique")
+  @@index([createdAt], map: "feed_research_created_idx")
+  @@map("feed_research")
 }
 
 model Instrument {

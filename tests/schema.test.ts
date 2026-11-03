@@ -3,13 +3,15 @@ import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { filterStoredAnnouncements, RELEVANCE_RULE_VERSION } from "../src/lib/announcements/filter";
 import { storeAnnouncements } from "../src/lib/announcements/ingest";
 import { matchStoredAnnouncements } from "../src/lib/announcements/match";
 import { seedStarterUniverse } from "../src/lib/instruments/starter-universe";
 import { NSE_SOURCE, parseAnnouncements } from "../src/lib/announcements/rss";
+import { analyzeStoredAnnouncements } from "../src/lib/research/analyze";
+import { ResearchError, type ResearchProvider } from "../src/lib/research/schema";
 
 const run = promisify(execFile);
 let engine: PGlite;
@@ -77,6 +79,73 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  async function researchInbox() {
+    await seedStarterUniverse(db);
+    await storeAnnouncements(db, [
+      { sourceId: "results", title: "TCS - Results", description: "Quarterly results announced", url: "https://example.com/results", publishedAt: null },
+      { sourceId: "routine", title: "TCS - Trading Window Closure", description: null, url: "https://example.com/routine", publishedAt: null },
+      { sourceId: "review", title: "TCS - Update", description: null, url: "https://example.com/review", publishedAt: null },
+      { sourceId: "unmatched", title: "UNKNOWN - Results", description: null, url: "https://example.com/unknown", publishedAt: null },
+    ]);
+    await matchStoredAnnouncements(db);
+    await filterStoredAnnouncements(db);
+  }
+  function researchProvider() {
+    return {
+      name: "test", model: "test-model",
+      analyze: vi.fn<ResearchProvider["analyze"]>().mockResolvedValue({
+        assessment: {
+          classification: "INVESTIGATE", summary: "Review this announcement.", significance: "Insufficient detail to establish financial impact.",
+          risks: ["Price and valuation are unknown."], uncertainties: ["Full filing has not been read."], evidenceIds: ["announcement"],
+        }, inputTokens: 100, outputTokens: 70,
+      }),
+    } satisfies ResearchProvider;
+  }
+  it("persists validated research with authoritative evidence and skips identical requests", async () => {
+    await researchInbox();
+    const provider = researchProvider();
+    expect(await analyzeStoredAnnouncements(db, provider)).toMatchObject({ analyzed: 2, attempted: 2, failed: 0 });
+    const rows = await db.feedResearch.findMany({ include: { feedItem: true } });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.evidence).toEqual([{ id: "announcement", source: NSE_SOURCE, sourceId: row.feedItem.sourceId, title: row.feedItem.title, url: row.feedItem.url }]);
+      expect(row.inputSnapshot).toMatchObject({ announcement: { publishedAt: null }, stock: { symbol: "TCS" } });
+      expect(row.inputTokens).toBe(100);
+      expect(row.inputHash).toHaveLength(64);
+    }
+    expect(await analyzeStoredAnnouncements(db, provider)).toMatchObject({ analyzed: 0, attempted: 0, skipped: 2 });
+    expect(provider.analyze).toHaveBeenCalledTimes(2);
+  });
+  it("bounds paid attempts, leaves failures retryable and stores no invalid assessment", async () => {
+    await researchInbox();
+    const provider = researchProvider();
+    provider.analyze.mockRejectedValue(new ResearchError("provider_http_error", 429));
+    expect(await analyzeStoredAnnouncements(db, provider, 1)).toMatchObject({ attempted: 1, analyzed: 0, failed: 1, failures: [{ code: "provider_http_error", httpStatus: 429 }] });
+    expect(await db.feedResearch.count()).toBe(0);
+    const invalid = researchProvider();
+    const result = await invalid.analyze({} as never);
+    invalid.analyze.mockResolvedValue({ ...result, assessment: { ...result.assessment, evidenceIds: ["invented"] } as never });
+    expect(await analyzeStoredAnnouncements(db, invalid, 1)).toMatchObject({ analyzed: 0, failed: 1 });
+    expect(await db.feedResearch.count()).toBe(0);
+    expect(await analyzeStoredAnnouncements(db, researchProvider(), 1)).toMatchObject({ analyzed: 1, attempted: 1 });
+  });
+  it("rechecks eligibility after generation before saving and allows changed inputs to be researched", async () => {
+    await researchInbox();
+    const provider = researchProvider();
+    const result = await provider.analyze({} as never);
+    provider.analyze.mockImplementation(async (input) => {
+      await db.instrument.updateMany({ where: { symbol: input.stock.symbol }, data: { active: false } });
+      return result;
+    });
+    expect(await analyzeStoredAnnouncements(db, provider, 1)).toMatchObject({ analyzed: 0, skipped: 1 });
+    expect(await db.feedResearch.count()).toBe(0);
+    await db.instrument.updateMany({ where: { symbol: "TCS" }, data: { active: true } });
+    const valid = researchProvider();
+    await analyzeStoredAnnouncements(db, valid);
+    await db.instrument.updateMany({ where: { symbol: "TCS" }, data: { name: "Updated stock display name" } });
+    expect(await analyzeStoredAnnouncements(db, valid)).toMatchObject({ analyzed: 2, attempted: 2 });
+    expect(await db.feedResearch.count()).toBe(4);
+  });
   it("filters matched announcements with reasons while preserving the raw inbox", async () => {
     await seedStarterUniverse(db);
     await storeAnnouncements(db, [

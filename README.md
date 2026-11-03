@@ -6,7 +6,8 @@ A personal Indian stock research assistant built with Next.js, a persistent Type
 
 - Node.js 24 LTS and npm (see `.nvmrc`).
 - PostgreSQL 17, either an existing local instance or Docker Compose when ready.
-- No Zerodha, AI, or Telegram credentials are needed for this task.
+- Ingestion, matching and filtering need no AI or delivery credentials. The
+  optional research command requires a Gemini API key.
 
 ## Local development
 
@@ -169,6 +170,57 @@ match/decision requires setting relevance back to `pending` and clearing its
 reason, version, and check time together. Decisions retain the latest result,
 not a full change-history log. The rules still need validation against actual
 feed samples once live NSE access is verified.
+
+## Announcement research
+
+Research uses Gemini's JSON API through a replaceable provider adapter. Configure
+`GEMINI_API_KEY` securely in your environment or ignored `.env` file and optionally
+set `GEMINI_MODEL` (default `gemini-2.5-flash`). Never commit a key. For cloud proxy
+credentials, bind `GEMINI_API_KEY` to `generativelanguage.googleapis.com` and allow
+that hostname in environment settings. The Node command uses the configured
+HTTP(S) proxy and retains TLS verification.
+
+```sh
+npm run db:migrate
+npm run announcements:match
+npm run announcements:filter
+npm run announcements:analyze -- --limit 5
+```
+
+Only matched, active NSE universe equities with a `keep` or `review` decision
+from the current filtering rules are eligible. Routine items, unmatched items,
+and unfiltered items are excluded. Research is manual: ingestion and the worker
+do not invoke a model automatically. The default limit is five provider attempts
+per invocation, with a maximum of twenty. API use may consume quota or incur
+charges; the provider's plan determines pricing. Model availability depends on
+the account. This implementation does not select a second provider on failure.
+
+The model receives only stock identity, bounded announcement text, timestamps,
+and filtering context. It does not fetch filings, current quotes, financial
+statements or valuation data. Output includes a summary, potential significance,
+risks, uncertainties, and an INVESTIGATE / WATCH / IGNORE research priority.
+These are machine-generated research notes, not verified facts or trade orders.
+Missing timestamps and truncated text remain explicit in the stored input.
+Instructions embedded in source text are treated as untrusted data. JSON schema
+validation rejects malformed output, unsupported classifications and unknown
+evidence IDs; it cannot establish the factual accuracy of model prose.
+
+Validated results are stored in `feed_research` with the original input snapshot,
+input hash, requested model, provider, prompt version, token counts when supplied,
+and evidence links copied from the source record. They stay attached to the raw
+feed item; no publication date, trade signal, or delivery record is invented.
+Use `npm run db:studio` to inspect records. An identical completed request is
+skipped on subsequent runs. Changed inputs, model or prompt versions can produce
+new research without deleting history. Eligibility is rechecked before saving.
+The unique database key prevents duplicate records; overlapping manual commands
+can still make duplicate provider calls, so run one analysis command at a time.
+
+HTTP failures, blocked/truncated generations and invalid output are not saved as
+successful research. Failed items can be retried by rerunning the command. The
+command returns a failing exit status if any item fails and emits safe error codes
+without provider response bodies or credentials. The provider timeout is 60
+seconds; retries and scheduling belong in the later job runner. Missing
+credentials fail explicitly; there is no fabricated or fixture result fallback.
 
 ## Health checks
 
