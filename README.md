@@ -329,6 +329,56 @@ current schedule monitors the implemented announcement RSS source only. Separate
 news sources, price polling, daily briefings, and alert delivery are not added
 by this scheduler.
 
+## Experimental free market data
+
+The provider-neutral `MarketDataProvider.getSnapshot()` interface returns a
+quote and daily candle history in one request. The first adapter uses Yahoo's
+unofficial chart endpoint for NSE equities. It is experimental: live access,
+current Indian-stock coverage, upstream usage conditions and source adjustment
+semantics still require verification. It is not an official exchange feed or a
+guaranteed real-time service. No authentication, cookie spoofing or fallback
+scraping is implemented.
+
+```sh
+npm run prices:check -- TCS
+npm run prices:check -- RELIANCE --days 30
+```
+
+Supply the plain NSE symbol, not a `.NS` suffix. The adapter maps it to Yahoo's
+provider symbol and checks response identity, INR currency and NSE exchange
+metadata. Only NSE equities are supported; index/BSE symbol mappings are not
+inferred. History is requested for 1–365 **calendar days**, not a guaranteed
+number of trading sessions. Output includes actual received candles and skipped
+bar counts. Empty history and a missing quote remain explicit. The command exits
+nonzero if there is no quote or a request/validation failure. A returned stale
+quote is valid inspection output, not evidence of a current trading price.
+
+Quotes preserve market time separately from retrieval time and report their age.
+`freshness` is `recent` (at most five minutes old), `stale`, or `clock_skew`; the
+provider's actual distribution delay remains `unknown` even for a recent quote.
+Excessively future timestamps are rejected. Missing quote metadata is never
+replaced by a candle close or the retrieval time. Off-hours prices can naturally
+be stale. This freshness flag does not claim the market is currently open.
+
+OHLC prices and volumes are exposed as strings rather than computed returns.
+Invalid/null OHLC bars are skipped; missing or unsafe volumes remain null.
+Misaligned arrays, duplicate/non-monotonic timestamps, inconsistent instruments
+and malformed responses fail explicitly. Daily bars have
+`priceBasis: provider_native_unverified` and `completion: unknown`: the adapter
+does not assert that today's bar is final or that historical adjustments are
+understood. A separate adjusted-close value is retained when supplied. JavaScript
+has already parsed the provider's JSON numbers; these strings do not restore
+precision absent from that response. Do not mix these values with a verified
+adjusted/unadjusted return methodology until that source behavior is established.
+
+Requests use the inherited proxy, TLS verification, a 15-second timeout, no
+redirect following, and a 2 MB response limit. Cloud network settings must allow
+`query1.finance.yahoo.com`. HTTP failures/rate limits and invalid data produce safe
+error codes without raw response bodies. Fixtures test normalization and transport
+behavior only; there is no runtime fixture fallback. Checks do not write prices
+to the database, create signals, call AI or schedule polling. Persistence,
+movement detection and pipeline integration are subsequent steps.
+
 ## Operational checks and restart recovery
 
 Inspect persisted job state independently of whether a worker is running:
