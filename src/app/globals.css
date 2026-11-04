@@ -13,3 +13,14 @@
 .unread-row .item-title { font-weight:650; }
 .nav-count { margin-left:auto; font-size:11px; border-radius:12px; padding:2px 7px; background:#183b32; color:#8ae5c6; }
 .action-error { color:#f7a7a7; font-size:13px; }
+
+.settings-form { padding:24px; }
+.settings-form fieldset { border:0; padding:0; margin:0; }
+.setting-option { display:flex; align-items:flex-start; gap:12px; padding:16px 0; border-bottom:1px solid var(--line); cursor:pointer; }
+.setting-option input { width:18px; height:18px; margin-top:3px; accent-color:#69ddbb; }
+.setting-option strong { display:block; font-size:14px; }
+.setting-option span span { display:block; font-size:12px; line-height:1.6; color:var(--muted); margin-top:4px; }
+.form-actions,.watchlist-form { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.form-actions { margin-top:22px; }
+.watchlist-form label { display:grid; gap:7px; }
+.watchlist-form select { background:#12231f; color:inherit; border:1px solid var(--line); border-radius:6px; padding:10px; max-width:100%; }

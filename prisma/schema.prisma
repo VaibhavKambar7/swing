@@ -165,6 +165,7 @@ model Instrument {
 
   announcements            Announcement[]       @relation("announcements_instrument_id_instruments_id_fk")
   feedItems                FeedItem[]
+  watchlistEntries         WatchlistEntry[]
   benchmark                Instrument?          @relation("instruments_benchmark_id_instruments_id_fk", fields: [benchmarkId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_benchmark_id_instruments_id_fk")
   instrumentsAsBenchmark   Instrument[]         @relation("instruments_benchmark_id_instruments_id_fk")
   sectorIndex              Instrument?          @relation("instruments_sector_index_id_instruments_id_fk", fields: [sectorIndexId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "instruments_sector_index_id_instruments_id_fk")
@@ -514,4 +515,29 @@ model ReadState {
   @@unique([ownerKey, signalId], map: "read_states_signal_unique")
   @@unique([ownerKey, dailyBriefingId], map: "read_states_briefing_unique")
   @@map("read_states")
+}
+
+model WatchlistEntry {
+  ownerKey     String   @map("owner_key")
+  instrumentId String   @map("instrument_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "watchlist_instrument_fk")
+
+  @@id([ownerKey, instrumentId])
+  @@index([instrumentId], map: "watchlist_instrument_idx")
+  @@map("watchlist_entries")
+}
+
+model WorkspacePreferences {
+  ownerKey             String @id @map("owner_key")
+  announcementsEnabled Boolean @default(true) @map("announcements_enabled")
+  movementsEnabled     Boolean @default(true) @map("movements_enabled")
+  briefingsEnabled     Boolean @default(true) @map("briefings_enabled")
+  investigateEnabled   Boolean @default(true) @map("investigate_enabled")
+  watchEnabled         Boolean @default(true) @map("watch_enabled")
+  unassessedEnabled    Boolean @default(false) @map("unassessed_enabled")
+  watchlistOnly        Boolean @default(false) @map("watchlist_only")
+  updatedAt            DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("workspace_preferences")
 }

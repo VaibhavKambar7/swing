@@ -14,16 +14,16 @@ export type InboxFilters = z.infer<typeof inboxFiltersSchema>;
 export type InboxItem = {
   id: string; kind: "announcement" | "movement"; title: string; symbol: string | null;
   classification: "INVESTIGATE" | "WATCH" | "IGNORE" | "PENDING";
-  isRead: boolean; readVersion: string;
+  isRead: boolean; readVersion: string; instrumentId: string | null;
   relevance: string; summary: string | null; recordedAt: Date; eventAt: Date | null; changePct: string | null;
 };
 // Latest assessment wins, including filters: a past INVESTIGATE must not match
 // an item whose latest research is IGNORE. Values are parameterized below.
-const inboxSql = Prisma.sql`
+export const inboxSql = Prisma.sql`
   SELECT f.id::text, 'announcement'::text AS kind, f.title, i.symbol,
     COALESCE(r.classification::text, 'PENDING') AS classification,
     f.relevance_status::text AS relevance, r.summary,
-    f.discovered_at AS "recordedAt", f.published_at AS "eventAt", NULL::text AS "changePct",
+    f.discovered_at AS "recordedAt", f.published_at AS "eventAt", NULL::text AS "changePct", f.instrument_id::text AS "instrumentId",
     COALESCE(r.id::text, 'source') AS "readVersion", COALESCE(rs.content_version = COALESCE(r.id::text, 'source'), false) AS "isRead"
   FROM feed_items f LEFT JOIN instruments i ON i.id = f.instrument_id
   LEFT JOIN LATERAL (SELECT id, classification, summary FROM feed_research WHERE feed_item_id = f.id ORDER BY created_at DESC, id DESC LIMIT 1) r ON true
@@ -31,7 +31,7 @@ const inboxSql = Prisma.sql`
   UNION ALL
   SELECT s.id::text, 'movement'::text, i.symbol || ' · price movement', i.symbol,
     CASE WHEN a.assessment->>'classification' IN ('INVESTIGATE','WATCH','IGNORE') THEN a.assessment->>'classification' ELSE 'PENDING' END,
-    'movement'::text, a.summary, s.created_at, s.observed_at, s.price_change_pct::text,
+    'movement'::text, a.summary, s.created_at, s.observed_at, s.price_change_pct::text, s.instrument_id::text,
     COALESCE(a.id::text, 'source'), COALESCE(rs.content_version = COALESCE(a.id::text, 'source'), false)
   FROM signals s JOIN instruments i ON i.id = s.instrument_id
   LEFT JOIN LATERAL (SELECT id, summary, assessment FROM analyses WHERE signal_id = s.id ORDER BY created_at DESC, id DESC LIMIT 1) a ON true

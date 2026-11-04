@@ -911,3 +911,20 @@ The worker runs health checks and explicitly queued announcement/research jobs.
 Optional market-aware scheduling runs sequential announcement pipelines;
 persistent work stays outside Next.js request handlers. Additional sources,
 report delivery is a separate step. Redis/BullMQ is deferred.
+
+## Frontend alert preferences and watchlist
+
+Apply `20261104061000_workspace_preferences` for this slice. `/watchlist` saves
+stocks from the configured active research universe. It does not change universe
+membership or import new market data. Removing a watched stock preserves sources,
+research, and read state. Stocks that leave active coverage stay visible as such.
+
+`/settings` saves alert categories and research priorities for the personal
+workspace. `/alerts` applies those preferences to stored research and reports;
+`/inbox` continues to show the complete research record. Defaults show Investigate,
+Watch, and daily reports. Unassessed items are opt-in. Ignore and routine notices
+remain in the research inbox. The watched-only preference applies to research
+alerts; daily reports remain market-wide. Turning categories off hides them in
+this feed without discarding records or review history. This is frontend-only
+filtering, with no email/Telegram delivery, push notifications, or worker changes.
+Runtime verification and migration application are deferred.
