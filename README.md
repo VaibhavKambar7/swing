@@ -990,3 +990,13 @@ requires `RESTORE_DATABASE_URL` for a separate empty database and restores in on
 transaction without dropping existing objects. See [backup and recovery](docs/operations/backups.md)
 for connection requirements, private storage, and the recovery drill. No backup,
 restore, deployment, or validation command has been run for this implementation.
+
+## Native deployment templates — Part 8.4b
+
+Reviewed-at-use systemd templates for web, worker, and an optional daily backup
+timer live in `ops/systemd`. They use a current Node 24 runtime and loopback
+listeners, with no Docker requirement. `ops:prepare-release` assembles standalone
+static assets after a build; `ops:readiness` checks both services without changing
+state. Follow [native deployment](docs/operations/native-deployment.md) during the
+later validation phase. Nothing has been installed, started, migrated, backed up,
+or deployed by this coding subpart.

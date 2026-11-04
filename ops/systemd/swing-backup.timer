@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily private Swing PostgreSQL archive
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=5min
+Unit=swing-backup.service
+
+[Install]
+WantedBy=timers.target

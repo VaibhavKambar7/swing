@@ -36,7 +36,9 @@
     "briefings:closing": "tsx scripts/closing-briefing.ts",
     "briefings:reassess": "tsx scripts/reassess-watchlist.ts",
     "db:backup": "tsx scripts/backup-db.ts",
-    "db:restore": "tsx scripts/restore-db.ts"
+    "db:restore": "tsx scripts/restore-db.ts",
+    "ops:prepare-release": "tsx scripts/prepare-release.ts",
+    "ops:readiness": "node --use-env-proxy --import tsx scripts/check-readiness.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

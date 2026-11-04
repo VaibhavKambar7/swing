@@ -1,0 +1,26 @@
+[Unit]
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+User=swing
+Group=swing
+Environment=NODE_ENV=production
+Environment=PATH=/opt/node24/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/swing/swing.env
+WorkingDirectory=/opt/swing/current
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/swing
+ExecStart=/opt/node24/bin/node --use-env-proxy --import tsx src/workers/index.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
