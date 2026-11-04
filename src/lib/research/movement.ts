@@ -31,7 +31,10 @@ async function movementInput(db: PrismaClient, signalId: string, at: Date) {
   }, orderBy: [{ publishedAt: "desc" }, { id: "asc" }], take: 30 });
   const seen = new Set<string>();
   const selected = filings.filter((entry) => { if (seen.has(entry.url)) return false; seen.add(entry.url); return true; }).slice(0, 5);
+  const context = signal.context && typeof signal.context === "object" && !Array.isArray(signal.context) ? signal.context.marketContext : null;
+  const contextText = context ? JSON.stringify(context, (key, value) => key === "snapshotPairs" ? undefined : value) : null;
   const input: MovementResearchInput = {
+    ...(contextText ? { marketContext: contextText.slice(0, 10000) } : {}),
     stock: { exchange: signal.instrument.exchange, symbol: signal.instrument.symbol, name: signal.instrument.name },
     movement: { signalId, observedAt: signal.observedAt.toISOString(), referenceAt: signal.windowStart.toISOString(),
       price: signal.price.toString(), referencePrice: signal.referencePrice.toString(), changePct: signal.priceChangePct.toString(),
@@ -45,7 +48,7 @@ async function movementInput(db: PrismaClient, signalId: string, at: Date) {
         timing: entry.publishedAt! > signal.observedAt ? "published_after_move" : "published_before_or_at_move",
         knownAtMove: entry.publishedAt! <= signal.observedAt && entry.discoveredAt <= signal.observedAt })),
     ], researchedAt: at.toISOString(),
-    contentTruncated: selected.some((entry) => entry.title.length > 2000 || (entry.description?.length ?? 0) > 4000) || filings.length > selected.length,
+    contentTruncated: (contextText?.length ?? 0) > 10000 || selected.some((entry) => entry.title.length > 2000 || (entry.description?.length ?? 0) > 4000) || filings.length > selected.length,
   };
   return { input, signal, selected };
 }

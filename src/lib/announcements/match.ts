@@ -49,7 +49,8 @@ export async function matchStoredAnnouncements(db: PrismaClient) {
       const codes = item.issuerCode ? instruments.filter((i) => i.bseCode === item.issuerCode) : [];
       const newsCandidates = item.source.startsWith("news-search:") ? instruments.filter((i) => {
         const title = ` ${normalize(item.title)} `;
-        return title.includes(` ${normalize(i.name)} `) || (i.symbol.length >= 3 && title.includes(` ${normalize(i.symbol)} `));
+        const escaped = i.symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return title.includes(` ${normalize(i.name)} `) || (i.symbol.length >= 3 && new RegExp(`(?:^|[^A-Za-z0-9&-])${escaped}(?=$|[^A-Za-z0-9&-])`).test(item.title));
       }) : [];
       const candidates = item.issuerCode ? codes : item.source.startsWith("news-search:") ? newsCandidates : null;
       const match: StockMatch = candidates ? candidates.length === 1 ? { status: "matched", instrumentId: candidates[0].id } : { status: candidates.length ? "ambiguous" : "unmatched", instrumentId: null } : matchAnnouncement(item.title, instruments);

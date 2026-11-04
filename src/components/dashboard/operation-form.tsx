@@ -23,7 +23,7 @@ export function OperationForm({ requestId, date, stocks, sources, movements }: {
 }) {
   const [kind, setKind] = useState("announcements.pipeline");
   const optionalAI = ["announcements.pipeline", "movements.research"].includes(kind);
-  return <form action={submitJob}><input type="hidden" name="requestId" value={requestId} />
+  return <form className="management-form" action={submitJob}><input type="hidden" name="requestId" value={requestId} />
     <label>Operation <select name="kind" value={kind} onChange={(e) => setKind(e.target.value)}>{operations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     {kind === "prices.collect" && <><label>Instrument <select name="symbol" required><option value="">Choose an instrument</option>{stocks.map((s) => <option key={s.symbol} value={s.symbol}>{s.symbol} · {s.name}</option>)}</select></label><label>History in calendar days <input name="days" type="number" min={1} max={365} defaultValue={7} required /></label></>}
     {kind === "sources.collect" && <label>Enabled source <select name="sourceId" required><option value="">Choose a source</option>{sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>}

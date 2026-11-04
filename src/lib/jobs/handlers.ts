@@ -68,7 +68,10 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
   return {
     "announcements.research-item": async (job, signal) => {
       const { feedItemId } = itemResearchPayload.parse(job.payload);
-      const result = await analyzeStoredAnnouncements(db, createGeminiProvider(), 1, signal, feedItemId);
+      let provider;
+      try { provider = createGeminiProvider(); }
+      catch { throw new JobError("AI_CONFIGURATION_REQUIRED", true); }
+      const result = await analyzeStoredAnnouncements(db, provider, 1, signal, feedItemId);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
       if (!result.analyzed && !result.skipped) throw new JobError("RESEARCH_ITEM_NOT_ELIGIBLE", true);
     },

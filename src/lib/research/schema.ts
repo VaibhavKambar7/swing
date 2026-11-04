@@ -30,6 +30,7 @@ export type MovementResearchInput = {
   stock: { exchange: string; symbol: string; name: string };
   movement: { signalId: string; observedAt: string; referenceAt: string; price: string; referencePrice: string; changePct: string; priceAgeAtResearchSeconds: number; source: string; providerSymbol: string; delayStatus: string; sourceSnapshotIds: string[] };
   evidence: { id: string; kind: "market_observation" | "official_announcement" | "news"; title: string; url: string | null; description: string | null; publishedAt: string | null; discoveredAt: string | null; timing: string; knownAtMove: boolean | null }[];
+  marketContext?: string;
   researchedAt: string;
   contentTruncated: boolean;
 };

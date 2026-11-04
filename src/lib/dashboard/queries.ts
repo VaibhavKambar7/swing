@@ -86,15 +86,20 @@ export async function getBriefings(db: PrismaClient, take = 25, page = 1) {
   } });
   return reports.map((report) => ({ ...report, ...reviewState(report.readStates, report.postOpenAssessments[0]?.id ?? report.id) }));
 }
-export async function getReport(db: PrismaClient, id: string) {
+export async function getReport(db: PrismaClient, id: string, page = 1) {
+  return db.$transaction((tx) => readReport(tx, id, page), { isolationLevel: "RepeatableRead" });
+}
+async function readReport(db: Prisma.TransactionClient, id: string, page: number) {
   if (!z.string().uuid().safeParse(id).success) return null;
   const report = await db.dailyBriefing.findUnique({ where: { id }, include: {
     researchFeedback: { where: { ownerKey: WORKSPACE_OWNER }, select: { contentVersion: true, useful: true, reason: true } },
     readStates: { where: { ownerKey: WORKSPACE_OWNER }, select: { contentVersion: true, readAt: true } },
-    postOpenAssessments: { orderBy: [{ assessedAt: "desc" }, { id: "desc" }], take: 100,
+    postOpenAssessments: { orderBy: [{ assessedAt: "desc" }, { id: "desc" }], take: 100, skip: (page - 1) * 100,
       select: { id: true, status: true, reason: true, assessedAt: true, instrument: { select: { symbol: true } } } },
   } });
-  return report ? { ...report, feedback: feedbackForVersion(report.researchFeedback, report.postOpenAssessments[0]?.id ?? report.id), ...reviewState(report.readStates, report.postOpenAssessments[0]?.id ?? report.id) } : null;
+  if (!report) return null;
+  const currentVersion = await getCurrentVersion(db, "briefing", id) ?? report.id;
+  return { ...report, feedback: feedbackForVersion(report.researchFeedback, currentVersion), ...reviewState(report.readStates, currentVersion) };
 }
 export const stringList = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -104,6 +109,9 @@ export function safeSourceUrl(value: unknown): string | null {
   return url && ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
 }
 export async function getResearchDetail(db: PrismaClient, kind: string, id: string, page = 1) {
+  return db.$transaction((tx) => readResearchDetail(tx, kind, id, page), { isolationLevel: "RepeatableRead" });
+}
+async function readResearchDetail(db: Prisma.TransactionClient, kind: string, id: string, page: number) {
   if (!["announcement", "movement"].includes(kind) || !z.string().uuid().safeParse(id).success) return null;
   if (kind === "announcement") {
     const item = await db.feedItem.findUnique({ where: { id }, include: { researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, research: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5, skip: (page - 1) * 5 } } });

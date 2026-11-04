@@ -27,11 +27,11 @@ export function feedbackForVersion(records: { contentVersion: string; useful: bo
   const record = records.find((f) => f.contentVersion === version);
   return record ? { useful: record.useful, reason: record.reason } : null;
 }
-export async function getFeedbackOverview(db: PrismaClient) {
+export async function getFeedbackOverview(db: PrismaClient, page = 1) {
   const [useful, notUseful, recent] = await db.$transaction([
     db.researchFeedback.count({ where: { ownerKey: WORKSPACE_OWNER, useful: true } }),
     db.researchFeedback.count({ where: { ownerKey: WORKSPACE_OWNER, useful: false } }),
-    db.researchFeedback.findMany({ where: { ownerKey: WORKSPACE_OWNER }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 50,
+    db.researchFeedback.findMany({ where: { ownerKey: WORKSPACE_OWNER }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 50, skip: (page - 1) * 50,
       select: { id: true, useful: true, reason: true, contentVersion: true, updatedAt: true,
         feedItem: { select: { id: true, title: true } }, signal: { select: { id: true, instrument: { select: { symbol: true } } } },
         dailyBriefing: { select: { id: true, kind: true, sessionDate: true } },

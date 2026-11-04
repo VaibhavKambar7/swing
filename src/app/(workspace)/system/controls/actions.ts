@@ -28,9 +28,9 @@ export async function submitJob(form: FormData) {
 }
 export async function cancelJob(form: FormData) {
   await requireAccess();
-  const id = z.string().uuid().parse(form.get("id"));
   let status = "failed";
   try {
+    const id = z.string().uuid().parse(form.get("id"));
     if (form.get("confirm") !== "yes") throw new Error();
     const result = await getDatabase().job.updateMany({ where: { id, status: { in: ["pending", "retry", "running"] } }, data: { cancelRequestedAt: new Date(), updatedAt: new Date() } });
     status = result.count ? "cancellation-requested" : "changed";

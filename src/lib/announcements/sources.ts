@@ -65,6 +65,7 @@ export async function collectSource(db: PrismaClient, id: string, signal?: Abort
 }
 export async function collectEnabledSources(db: PrismaClient, signal?: AbortSignal) {
   const sources = await db.feedSource.findMany({ where: { enabled: true }, orderBy: { id: "asc" } });
+  if (!sources.length) throw new AnnouncementFeedError("source_configuration_required", "Enable at least one source");
   let received = 0, inserted = 0, duplicates = 0, failed = 0;
   for (const source of sources) { signal?.throwIfAborted(); try { const result = await collectSource(db, source.id, signal); received += result.received; inserted += result.inserted; duplicates += result.duplicates; } catch { failed++; } }
   return { received, inserted, duplicates, failed };

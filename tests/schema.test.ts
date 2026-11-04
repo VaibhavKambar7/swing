@@ -1095,3 +1095,26 @@ describe("aligned comparison evidence", () => {
     expect(context.usualVolatility.status).toBe("unavailable");
   });
 });
+
+describe("persistent provider throttling", () => {
+  it("honors a server cooldown across wrapper instances without another request", async () => {
+    const { rateLimitedFetch } = await import("../src/lib/network/rate-limit");
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("rate limited", { status: 429, headers: { "retry-after": "3600" } }));
+    expect((await rateLimitedFetch(db, fetcher)("https://synthetic.example.com/feed")).status).toBe(429);
+    await expect(rateLimitedFetch(db, fetcher)("https://synthetic.example.com/feed")).rejects.toThrow("PROVIDER_COOLDOWN");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("does not start a provider request when cancellation is already requested", async () => {
+    const { rateLimitedFetch } = await import("../src/lib/network/rate-limit");
+    const abort = new AbortController(); abort.abort();
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(rateLimitedFetch(db, fetcher)("https://synthetic.example.com/feed", { signal: abort.signal })).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("does not record a successful collection pipeline with no enabled sources", async () => {
+    const { collectEnabledSources } = await import("../src/lib/announcements/sources");
+    await db.feedSource.updateMany({ data: { enabled: false } });
+    await expect(collectEnabledSources(db)).rejects.toMatchObject({ code: "source_configuration_required" });
+    expect(await db.feedItem.count()).toBe(0);
+  });
+});

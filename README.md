@@ -95,7 +95,7 @@ an immutable import snapshot. Repeating an identical import is harmless.
 ## Sources and research
 
 NSE RSS is enabled by the source migration; BSE is initially disabled. `/sources`
-can enable BSE and add Google News RSS searches (maximum 20 configured sources).
+can enable BSE and add Google News RSS searches (maximum 20 enabled sources).
 BSE uses the official announcements JSON endpoint and exact configured scrip
 codes. NSE matches issuer headings to active NSE equity symbols/company names;
 external news requires an unambiguous full company name or stock symbol in its
@@ -138,7 +138,8 @@ a configuration error, while storage, jobs and UI use provider-neutral contracts
 
 Automatic collection is opt-in. `WORKER_PRICE_SYMBOLS` empty selects all imported
 active instruments, including mapped indexes; a comma-separated list restricts
-selection. A durable rotation enqueues at most `WORKER_PRICE_BATCH_SIZE` (default
+selection. Include mapped index symbols in an explicit selection when you want
+benchmark/sector observations collected too. A durable rotation enqueues at most `WORKER_PRICE_BATCH_SIZE` (default
 20, maximum 100) per configured slot, staggered by
 `WORKER_PRICE_REQUEST_INTERVAL_MS` (default 1000, range 250–60000). Repeated ticks
 cannot exceed that slot's budget. Busy stocks do not accumulate work, and expired
@@ -255,6 +256,8 @@ npm run build
 
 Tests use mocked providers and an isolated in-memory PGlite database, applying
 migrations only there. They need no Docker, real database, paid key or provider
-access. A build does not connect to PostgreSQL. Live feeds, prices, Gemini,
+access. A build does not connect to PostgreSQL. In restricted environments that block
+Turbopack helper ports, `npm run build -- --webpack` checks the production bundle
+with Next’s Webpack builder instead. Live feeds, prices, Gemini,
 calendar accuracy, real migrations, sustained runtime behavior, deployments and
 backup/restore drills still require your separate operational validation.
