@@ -30,3 +30,8 @@
 .feedback-form textarea { width:100%; box-sizing:border-box; resize:vertical; background:#12231f; color:inherit; border:1px solid var(--line); padding:12px; border-radius:6px; font:inherit; }
 .feedback-form [aria-pressed=true] { border-color:#69ddbb; color:#69ddbb; }
 .sidebar { overflow-y:auto; }
+
+.activity-monitor { display:flex; align-items:center; justify-content:flex-end; gap:12px; flex-wrap:wrap; font-size:11px; padding:8px 0; }
+.activity-state { color:var(--muted); font-size:10px; }
+.activity-monitor .button { font-size:10px; padding:6px 9px; }
+@media(max-width:760px) { .topbar { gap:12px; flex-wrap:wrap; } .activity-monitor { justify-content:flex-start; } }

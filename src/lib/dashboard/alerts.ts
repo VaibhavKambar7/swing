@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { inboxSql, type InboxItem } from "./queries";
-import { getPreferences } from "./preferences";
+import { getPreferences, type AlertPreferences } from "./preferences";
 import { WORKSPACE_OWNER } from "./read-state";
 export const alertFiltersSchema = z.object({
   page: z.coerce.number().int().min(1).max(200).default(1),
@@ -13,7 +13,16 @@ export async function getFrontendAlerts(db: PrismaClient, input: z.infer<typeof 
   // Read preferences and items from one snapshot so a count matches its list.
   return db.$transaction(async (tx) => {
     const p = await getPreferences(tx);
-    const eligible = Prisma.sql`WITH inbox AS (${inboxSql}), eligible AS (
+    const eligible = eligibleAlertsSql(p);
+    const where = Prisma.sql`WHERE (${filters.read} = 'all' OR "isRead" = (${filters.read} = 'read'))`;
+    const items = await tx.$queryRaw<FrontendAlert[]>(Prisma.sql`${eligible} SELECT * FROM eligible ${where} ORDER BY "recordedAt" DESC, kind, id DESC LIMIT 25 OFFSET ${(filters.page - 1) * 25}`);
+    const [counts] = await tx.$queryRaw<{ total: bigint; unread: bigint }[]>(Prisma.sql`${eligible} SELECT count(*) FILTER (WHERE ${filters.read} = 'all' OR "isRead" = (${filters.read} = 'read')) AS total, count(*) FILTER (WHERE NOT "isRead") AS unread FROM eligible`);
+    return { items, total: Number(counts.total), unread: Number(counts.unread), preferences: p, page: filters.page };
+  }, { isolationLevel: "RepeatableRead" });
+}
+
+function eligibleAlertsSql(p: AlertPreferences) {
+  return Prisma.sql`WITH inbox AS (${inboxSql}), eligible AS (
       SELECT * FROM inbox WHERE
         ((kind = 'announcement' AND ${p.announcementsEnabled}) OR (kind = 'movement' AND ${p.movementsEnabled}))
         AND relevance <> 'routine'
@@ -28,9 +37,12 @@ export async function getFrontendAlerts(db: PrismaClient, input: z.infer<typeof 
       LEFT JOIN read_states rs ON rs.daily_briefing_id = b.id AND rs.owner_key = ${WORKSPACE_OWNER}
       WHERE ${p.briefingsEnabled}
     )`;
-    const where = Prisma.sql`WHERE (${filters.read} = 'all' OR "isRead" = (${filters.read} = 'read'))`;
-    const items = await tx.$queryRaw<FrontendAlert[]>(Prisma.sql`${eligible} SELECT * FROM eligible ${where} ORDER BY "recordedAt" DESC, kind, id DESC LIMIT 25 OFFSET ${(filters.page - 1) * 25}`);
-    const [counts] = await tx.$queryRaw<{ total: bigint; unread: bigint }[]>(Prisma.sql`${eligible} SELECT count(*) FILTER (WHERE ${filters.read} = 'all' OR "isRead" = (${filters.read} = 'read')) AS total, count(*) FILTER (WHERE NOT "isRead") AS unread FROM eligible`);
-    return { items, total: Number(counts.total), unread: Number(counts.unread), preferences: p, page: filters.page };
+}
+
+export async function getAlertSummary(db: PrismaClient) {
+  return db.$transaction(async (tx) => {
+    const p = await getPreferences(tx);
+    const [counts] = await tx.$queryRaw<{ total: bigint; unread: bigint }[]>(Prisma.sql`${eligibleAlertsSql(p)} SELECT count(*) AS total, count(*) FILTER (WHERE NOT "isRead") AS unread FROM eligible`);
+    return { total: Number(counts.total), unread: Number(counts.unread) };
   }, { isolationLevel: "RepeatableRead" });
 }

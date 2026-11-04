@@ -966,3 +966,18 @@ shows both times. Quote omissions and movement skip reasons remain in checkpoint
 metadata. Closing captures do not guarantee complete final exchange prices.
 The adapter remains replaceable; this adds no Kite credentials or integration.
 No live requests, migrations, builds, or tests were run for this coding subpart.
+
+## Frontend update checks
+
+The open workspace checks `/api/workspace/activity` every 30 seconds while visible
+and online, backing off to at most two minutes after failures. It reads stored
+records and preference-filtered unread counts only; it never contacts data or AI
+providers. The header distinguishes unavailable update checks from zero unread
+alerts. Tabs resume checks when visible or back online; requests do not overlap.
+
+New stored activity refreshes the overview and list views when forms have not
+been edited or focused. Detail/settings pages offer an explicit refresh button
+so drafts are not replaced automatically. Read/unread and feedback still require
+explicit saves. These are in-app updates while the app is open, not browser push
+notifications or guaranteed real-time delivery. Live operation and UI verification
+remain deferred. The local single-workspace access model is unchanged.
