@@ -9,12 +9,27 @@ export function createGroqProvider(env: Record<string, string | undefined> = pro
   return { name: "groq", model, async analyze(input, signal) {
     const ids = "movement" in input ? input.evidence.map((e) => e.id) : ["announcement"];
     const schema = researchSchemaFor(ids, "movement" in input ? "movement" : undefined);
+    // GPT-OSS supports constrained decoding. Keep local validation for semantic
+    // requirements such as unique evidence IDs and the mandatory movement ID.
+    const responseFormat = ["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(model)
+      ? { type: "json_schema", json_schema: { name: "swing_research", strict: true, schema: {
+        type: "object", additionalProperties: false,
+        properties: {
+          classification: { type: "string", enum: ["INVESTIGATE", "WATCH", "IGNORE"] },
+          summary: { type: "string" }, significance: { type: "string" },
+          risks: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          uncertainties: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          evidenceIds: { type: "array", items: { type: "string", enum: ids }, minItems: 1, maxItems: 6 },
+        },
+        required: ["classification", "summary", "significance", "risks", "uncertainties", "evidenceIds"],
+      } } }
+      : { type: "json_object" };
     try {
       signal?.throwIfAborted();
       const response = await fetcher("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model, temperature: 0.1, max_completion_tokens: 4096, response_format: { type: "json_object" }, messages: [
+        body: JSON.stringify({ model, temperature: 0.1, max_completion_tokens: 4096, response_format: responseFormat, messages: [
           { role: "system", content: `${systemInstruction}\nReturn one JSON object with exactly classification (INVESTIGATE/WATCH/IGNORE), summary, significance, risks (1–6 strings), uncertainties (1–6 strings), evidenceIds (1–6 unique IDs). Allowed evidence IDs: ${JSON.stringify(ids)}.` },
           { role: "user", content: JSON.stringify(input) },
         ] }),

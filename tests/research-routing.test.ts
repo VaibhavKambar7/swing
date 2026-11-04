@@ -11,6 +11,10 @@ describe("Groq primary and Gemini fallback", () => {
     expect(result).toMatchObject({ provider: "groq", model: "openai/gpt-oss-20b", inputTokens: 12, outputTokens: 34 });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0][0]).toBe("https://api.groq.com/openai/v1/chat/completions");
+    const body = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(body.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true, schema: {
+      additionalProperties: false, properties: { evidenceIds: { items: { enum: ["announcement"] } } },
+    } } });
   });
   it("falls back after provider failure without mislabelling Gemini output", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("rate limit", { status: 429 })).mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(assessment) }] } }] })));
