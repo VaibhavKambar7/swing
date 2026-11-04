@@ -193,9 +193,12 @@ uses only contemporaneously stored opening/current quotes and produces
 PENDING_DATA/WATCH/CAUTION, never a trade instruction. Collection must supply
 quotes separately. Older report versions remain accessible.
 
-Follow-up v2 uses a contemporaneous quote captured within 15 minutes after
+Follow-up v3 uses a contemporaneous quote captured within 15 minutes after
 research during a session, or after the next opening. Reference choice and
-benchmark mapping are frozen. Later historical imports cannot manufacture a
+benchmark mapping are frozen. Benchmark membership must have been imported by
+the reference retrieval time and effective by its trading date; current or
+backfilled-later mappings cannot supply a historical comparison. Missing import
+history leaves that comparison unavailable. Later historical imports cannot manufacture a
 missing baseline. Horizons are the 1st, 5th and 20th later trading-day closes,
 counting covered open dates, skipping holidays/weekends. Quotes must be captured
 in the final 15 minutes and recorded/retrieved by five minutes after close.

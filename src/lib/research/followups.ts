@@ -2,7 +2,7 @@ import { comparisonChange } from "../market-data/context";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { CalendarError, getMarketDay, getMarketState, marketDate, type MarketCalendar } from "../market/calendar";
-export const FOLLOWUP_VERSION = "first-observation-to-future-session-close-v2";
+export const FOLLOWUP_VERSION = "first-observation-to-future-session-close-v3";
 export const followUpPayload = z.object({ limit: z.number().int().min(1).max(100).default(25) }).strict();
 const MINUTE = 60000;
 const Calc = Prisma.Decimal.clone({ precision: 60 });
@@ -27,6 +27,15 @@ function targetWindow(calendar: MarketCalendar, referenceAt: Date, horizon: numb
     return { close, start: new Date(Math.max(Date.parse(`${date}T${session.open}:00+05:30`), close.getTime() - 15 * MINUTE)), end: new Date(close.getTime() + 5 * MINUTE) };
   }
   throw new CalendarError("CALENDAR_COVERAGE_REQUIRED");
+}
+export async function historicalBenchmark(db: Pick<PrismaClient, "universeImport" | "instrument">, instrumentId: string, referenceTime: Date, knownAt: Date) {
+  const stock = await db.instrument.findUniqueOrThrow({ where: { id: instrumentId }, select: { symbol: true } });
+  const membership = await db.universeImport.findFirst({ where: { importedAt: { lte: knownAt }, effectiveDate: { lte: new Date(marketDate(referenceTime)) } }, orderBy: [{ effectiveDate: "desc" }, { importedAt: "desc" }, { id: "desc" }] });
+  const members = Array.isArray(membership?.members) ? membership.members : [];
+  const member = members.find((m) => m && typeof m === "object" && !Array.isArray(m) && m.symbol === stock.symbol);
+  const benchmarkSymbol = member && typeof member === "object" && !Array.isArray(member) && typeof member.benchmark === "string" ? member.benchmark : null;
+  const index = benchmarkSymbol ? await db.instrument.findUnique({ where: { exchange_symbol: { exchange: "NSE", symbol: benchmarkSymbol } }, select: { id: true, kind: true } }) : null;
+  return { benchmarkId: index?.kind === "index" ? index.id : null, membershipImportId: membership?.id ?? null, mappingStatus: membership ? benchmarkSymbol ? "historical_membership_mapping" : "index_not_mapped_in_known_membership" : "historical_mapping_unavailable" };
 }
 export async function updateResearchFollowUps(db: PrismaClient, calendar: MarketCalendar, limit = 25, at = new Date(), signal?: AbortSignal) {
   followUpPayload.parse({ limit });
@@ -68,8 +77,8 @@ export async function updateResearchFollowUps(db: PrismaClient, calendar: Market
             quoteTime: { gte: window.start, lte: deadline }, retrievedAt: { gte: window.start, lte: deadline }, recordedAt: { lte: deadline, gte: window.start },
           }, orderBy: [{ quoteTime: "asc" }, { retrievedAt: "asc" }, { id: "asc" }] });
           if (!reference) return save(at < window.end ? "pending" : "unavailable", at < window.end ? "AWAITING_REFERENCE" : "REFERENCE_WINDOW_MISSING");
-          const stock = await tx.instrument.findUniqueOrThrow({ where: { id: instrumentId }, select: { benchmarkId: true } });
-          frozenComparison = { benchmarkId: stock.benchmarkId, status: "pending", priceBasis: "provider_native_unverified", corporateActions: "unverified", disclaimer: "Observational price changes only; splits, dividends, costs and execution are not accounted for." };
+          const mapping = await historicalBenchmark(tx, instrumentId, reference.quoteTime!, reference.retrievedAt);
+          frozenComparison = { ...mapping, status: "pending", priceBasis: "provider_native_unverified", corporateActions: "unverified", disclaimer: "Observational price changes only; splits, dividends, costs and execution are not accounted for." };
           await tx.researchFollowUp.update({ where: { id }, data: { comparison: frozenComparison, referenceSnapshotId: reference.id, referenceAt: reference.quoteTime, referencePrice: reference.quotePrice, updatedAt: at } });
         }
         const window = targetWindow(calendar, reference.quoteTime!, row.horizonSessions);

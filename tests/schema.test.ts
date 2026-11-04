@@ -1118,3 +1118,17 @@ describe("persistent provider throttling", () => {
     expect(await db.feedItem.count()).toBe(0);
   });
 });
+
+describe("historical universe provenance", () => {
+  it("does not use a later membership import or today's benchmark for an older reference", async () => {
+    const { historicalBenchmark } = await import("../src/lib/research/followups");
+    const old = await db.instrument.create({ data: { exchange: "NSE", symbol: "OLDINDEX", name: "Old index", kind: "index" } });
+    const newer = await db.instrument.create({ data: { exchange: "NSE", symbol: "NEWINDEX", name: "New index", kind: "index" } });
+    const instrument = await db.instrument.create({ data: { exchange: "NSE", symbol: "EXAMPLE", name: "Example", benchmarkId: newer.id } });
+    await db.universeImport.create({ data: { source: "Synthetic known membership", effectiveDate: new Date("2026-11-01"), importedAt: new Date("2026-11-02T00:00:00Z"), contentHash: "known", members: [{ symbol: "EXAMPLE", benchmark: "OLDINDEX" }] } });
+    await db.universeImport.create({ data: { source: "Synthetic later import", effectiveDate: new Date("2026-11-03"), importedAt: new Date("2026-11-06T00:00:00Z"), contentHash: "later", members: [{ symbol: "EXAMPLE", benchmark: "NEWINDEX" }] } });
+    const reference = new Date("2026-11-04T04:00:00Z");
+    expect(await historicalBenchmark(db, instrument.id, reference, reference)).toMatchObject({ benchmarkId: old.id, mappingStatus: "historical_membership_mapping" });
+    expect(await historicalBenchmark(db, instrument.id, new Date("2026-11-01T04:00:00Z"), new Date("2026-11-01T04:00:00Z"))).toMatchObject({ benchmarkId: null, mappingStatus: "historical_mapping_unavailable" });
+  });
+});
