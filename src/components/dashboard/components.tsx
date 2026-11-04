@@ -26,15 +26,15 @@ export function Unavailable() {
 }
 export function InboxTable({ items, compact = false }: { items: InboxItem[]; compact?: boolean }) {
   if (!items.length) return <Empty title="Nothing here yet">No records match this view. New announcements and recorded price movements will appear here after collection.</Empty>;
-  return <div className="table-scroll"><table><thead><tr><th>Stock / source</th><th>Research item</th><th>Priority</th>{!compact && <th>Recorded</th>}<th><span className="sr-only">Details</span></th></tr></thead><tbody>{items.map((item) => <tr key={`${item.kind}:${item.id}`}>
+  return <div className="table-scroll"><table><thead><tr><th>Stock / source</th><th>Research item</th><th>Priority</th>{!compact && <th>Recorded</th>}<th><span className="sr-only">Details</span></th></tr></thead><tbody>{items.map((item) => <tr key={`${item.kind}:${item.id}`} className={item.isRead ? "" : "unread-row"}>
     <td><span className="stock-symbol">{item.symbol ?? "Unmatched"}</span><span className="cell-caption">{item.kind === "movement" ? "Price movement" : "Announcement"}</span></td>
-    <td className="title-cell"><Link className="item-title" href={`/inbox/${item.kind}/${item.id}`}>{item.title}</Link>{item.summary ? <p className="row-summary">{item.summary}</p> : <span className="cell-caption">{item.relevance === "routine" ? "Routine notice · retained in inbox" : "No stored research assessment"}</span>}{item.changePct && <span className={`change ${Number(item.changePct) >= 0 ? "positive" : "negative"}`}>{Number(item.changePct) >= 0 ? "+" : ""}{Number(item.changePct).toFixed(2)}% observed move</span>}</td>
+    <td className="title-cell">{!item.isRead && <span className="review-label unread">Unread</span>}<Link className="item-title" href={`/inbox/${item.kind}/${item.id}`}>{item.title}</Link>{item.summary ? <p className="row-summary">{item.summary}</p> : <span className="cell-caption">{item.relevance === "routine" ? "Routine notice · retained in inbox" : "No stored research assessment"}</span>}{item.changePct && <span className={`change ${Number(item.changePct) >= 0 ? "positive" : "negative"}`}>{Number(item.changePct) >= 0 ? "+" : ""}{Number(item.changePct).toFixed(2)}% observed move</span>}</td>
     <td><Badge value={item.classification} /></td>{!compact && <td className="time-cell">{time(item.recordedAt)}</td>}
     <td><Link className="arrow-link" href={`/inbox/${item.kind}/${item.id}`} aria-label={`Open ${item.title}`}>↗</Link></td>
   </tr>)}</tbody></table></div>;
 }
 export function inboxUrl(filters: InboxFilters, page: number) {
-  return `/inbox?${new URLSearchParams({ kind: filters.kind, classification: filters.classification, stock: filters.stock, page: String(page) })}`;
+  return `/inbox?${new URLSearchParams({ kind: filters.kind, classification: filters.classification, stock: filters.stock, read: filters.read, page: String(page) })}`;
 }
 export function Metric({ label, value, note, accent }: { label: string; value: string | number; note: string; accent?: boolean }) {
   return <div className={`metric ${accent ? "accent" : ""}`}><span className="metric-label">{label}</span><strong>{typeof value === "number" ? value.toLocaleString("en-IN") : value}</strong><span className="metric-note">{note}</span></div>;

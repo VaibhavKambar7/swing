@@ -111,6 +111,7 @@ model FeedItem {
   instrumentId         String?             @map("instrument_id") @db.Uuid
   instrument           Instrument?         @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
   research             FeedResearch[]
+  readStates           ReadState[]
 
   @@unique([source, sourceId], map: "feed_items_source_unique")
   @@index([discoveredAt], map: "feed_items_discovered_idx")
@@ -265,6 +266,7 @@ model Signal {
   context            Json         @default("{}") @db.JsonB
   createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  readStates     ReadState[]
   alerts         Alert[]          @relation("alerts_signal_id_signals_id_fk")
   analyses       Analysis[]       @relation("analyses_signal_id_signals_id_fk")
   jobs           Job[]            @relation("jobs_signal_id_signals_id_fk")
@@ -406,6 +408,7 @@ model DailyBriefing {
   content        Json     @db.JsonB
   markdown       String
   postOpenAssessments PostOpenAssessment[]
+  readStates          ReadState[]
 
   @@unique([kind, sessionDate, reportVersion], map: "daily_briefings_session_unique")
   @@index([cutoffAt], map: "daily_briefings_cutoff_idx")
@@ -491,4 +494,24 @@ model PerformanceOutcome {
   @@unique([alertId, horizonTradingDays], map: "performance_outcomes_alert_horizon_unique")
   @@index([status, dueSession], map: "performance_outcomes_due_idx")
   @@map("performance_outcomes")
+}
+
+// Review state belongs to this personal workspace, never to the source record.
+// The SQL migration additionally requires exactly one target per row.
+model ReadState {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerKey        String   @map("owner_key")
+  feedItemId      String?  @map("feed_item_id") @db.Uuid
+  signalId        String?  @map("signal_id") @db.Uuid
+  dailyBriefingId String?  @map("daily_briefing_id") @db.Uuid
+  contentVersion  String   @map("content_version")
+  readAt          DateTime @default(now()) @map("read_at") @db.Timestamptz(6)
+  feedItem        FeedItem? @relation(fields: [feedItemId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "read_states_feed_fk")
+  signal          Signal? @relation(fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "read_states_signal_fk")
+  dailyBriefing   DailyBriefing? @relation(fields: [dailyBriefingId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "read_states_briefing_fk")
+
+  @@unique([ownerKey, feedItemId], map: "read_states_feed_unique")
+  @@unique([ownerKey, signalId], map: "read_states_signal_unique")
+  @@unique([ownerKey, dailyBriefingId], map: "read_states_briefing_unique")
+  @@map("read_states")
 }

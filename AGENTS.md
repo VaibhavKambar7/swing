@@ -13,8 +13,11 @@
   branch or pull request unless requested. Check remote changes first and use
   normal fast-forward pushes; never overwrite unrelated remote work.
 - Use repository-local commit email `vaibhavkambar123@gmail.com`.
-- Website alerts are preferred; email can follow. Telegram and delivery are
-  deferred until ingestion and research work.
+- Deliver all alerts and reports through the app frontend only. Do not add
+  email or Telegram delivery. Keep source records and review state separate.
+- Implement one subpart, commit and push it, then continue to the next until
+  the user stops work. Defer tests and computer use while code implementation
+  is in progress, as requested by the user.
 - Google Docs progress syncing was requested but no Docs connector was available
   when these instructions were written. Do not claim syncing is configured.
   If a writable Docs connector and target document become available, maintain

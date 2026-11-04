@@ -1,6 +1,6 @@
 # Swing
 
-A personal Indian stock research assistant built with Next.js, a persistent TypeScript worker, and PostgreSQL/Prisma. Manual commands fetch announcement RSS into a deduplicated inbox and match issuer headings to a configured stock universe. Website alerts are the preferred delivery direction, with email an optional later addition.
+A personal Indian stock research assistant built with Next.js, a persistent TypeScript worker, and PostgreSQL/Prisma. Manual commands fetch announcement RSS into a deduplicated inbox and match issuer headings to a configured stock universe. The app frontend is the delivery channel for alerts and reports. Email and Telegram delivery are out of scope.
 
 ## Requirements
 
@@ -37,14 +37,15 @@ npm run worker:dev
 
 Open [Swing](http://localhost:3000). Without PostgreSQL, the web page and liveness checks still work; readiness reports HTTP 503, and the worker retries its database check every 10 seconds.
 
-## Read-only research workspace
+## Research workspace and review state
 
 Run `npm run dev` and open `http://localhost:3000`. The UI reads your existing
 Prisma database. It does not require provider credentials, fetch announcements
-or prices, run AI, enqueue jobs, or change read/feedback state.
+or prices, run AI, or enqueue jobs. Explicit review controls save read/unread
+state; simply viewing or prefetching a page never marks it read.
 
 - `/`: overview, recent records, collection recency, reports, and failures.
-- `/inbox`: announcements and movement signals with stock, type, priority, and
+- `/inbox`: announcements and movement signals with stock, type, priority, review-state, and
   page filters; each item is filtered against its latest stored assessment.
 - `/inbox/announcement/:id` and `/inbox/movement/:id`: source links, descriptions,
   research history, risks, uncertainties, and timestamps.
@@ -60,9 +61,15 @@ The UI never replaces unavailable data with fixtures. Source HTML is displayed
 as text, report HTML is not enabled, and source links permit HTTP(S) only.
 
 This slice uses the application's local loopback access and does not add browser
-sign-in. It is read-only: the website inbox is a research-record view, not yet
-an alert-delivery or read/unread system. User preferences, feedback controls and
-read-state persistence remain separate coding steps. No new migration is needed.
+sign-in. Read state belongs to one server-owned personal workspace. Apply the
+`20261104060000_workspace_read_state` migration before using review controls.
+Announcements, movements, and reports have explicit Mark read / Mark unread
+buttons on their detail pages, unread navigation counts, and unread indicators.
+The research inbox supports unread filtering. A new research assessment or
+post-open report assessment resurfaces its parent item as unread. A stale form
+cannot mark a newer assessment read. Raw sources and research history stay intact.
+Feedback and alert preferences remain separate subparts. Migration application
+and runtime validation of review state are deferred.
 
 ## Announcement ingestion — first working slice
 
@@ -592,8 +599,8 @@ Source collection is labeled unverified when no successful announcement pipeline
 was recorded before cutoff, or stale when that success was over 75 minutes old.
 A recent success establishes collection activity, not complete or real-time
 upstream coverage. No eligible stored filings does not prove that no developments
-occurred. The feature stores and displays the report through the CLI/Prisma
-Studio only; website/email delivery is separate work.
+occurred. Reports are stored immutably and can be read through the CLI or the website
+briefings views.
 
 ## Preliminary market summary
 
@@ -648,7 +655,7 @@ replay a backlog of earlier dates. A cross-midnight special-session report keeps
 the previous trading date. If both an earlier cross-midnight report and the
 current day's summary were missed, the planner favors the current day's due
 summary. Explicit queueing uses `{ "sessionDate": "YYYY-MM-DD" }` and the normal
-job runner. Website/email delivery remains separate.
+job runner. Reports are visible in the website briefings views.
 
 ## Post-open watchlist reassessment
 
