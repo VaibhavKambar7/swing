@@ -84,7 +84,8 @@ export function parseYahooSnapshot(
 export function createYahooProvider(fetcher: typeof fetch = fetch, clock: () => Date = () => new Date()): MarketDataProvider {
   return {
     name: "yahoo-experimental",
-    async getSnapshot(instrument, days = 30) {
+    async getSnapshot(instrument, days = 30, signal) {
+      signal?.throwIfAborted();
       const symbol = nseProviderSymbol(instrument);
       validateHistoryDays(days);
       const requestedAt = clock();
@@ -93,7 +94,7 @@ export function createYahooProvider(fetcher: typeof fetch = fetch, clock: () => 
       url.search = new URLSearchParams({ interval: "1d", period1: String(Math.floor(requestedAt.getTime() / 1000) - days * 86400),
         period2: String(Math.floor(requestedAt.getTime() / 1000)), includeAdjustedClose: "true" }).toString();
       try {
-        const response = await fetcher(url, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(15000) });
+        const response = await fetcher(url, { headers: { Accept: "application/json" }, redirect: "error", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
         if (!response.ok) {
           await response.body?.cancel().catch(() => undefined);
           throw new MarketDataError("PROVIDER_HTTP_ERROR", response.status);
@@ -113,6 +114,7 @@ export function createYahooProvider(fetcher: typeof fetch = fetch, clock: () => 
         } finally { await reader.cancel().catch(() => undefined); }
         return parseYahooSnapshot(JSON.parse(Buffer.concat(chunks).toString("utf8")), instrument, days, clock());
       } catch (error) {
+        signal?.throwIfAborted();
         if (error instanceof MarketDataError) throw error;
         throw new MarketDataError(error instanceof SyntaxError ? "INVALID_PROVIDER_JSON" : "PROVIDER_NETWORK_ERROR");
       }

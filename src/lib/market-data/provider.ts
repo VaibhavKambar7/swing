@@ -17,7 +17,7 @@ export type MarketSnapshot = {
 };
 export type MarketDataProvider = {
   name: string;
-  getSnapshot(instrument: MarketInstrument, calendarDays?: number): Promise<MarketSnapshot>;
+  getSnapshot(instrument: MarketInstrument, calendarDays?: number, signal?: AbortSignal): Promise<MarketSnapshot>;
 };
 export class MarketDataError extends Error {
   constructor(public readonly code: string, public readonly httpStatus?: number) {

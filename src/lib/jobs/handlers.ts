@@ -17,7 +17,12 @@ import { CalendarError, type MarketCalendar } from "../market/calendar";
 import { generateClosingBriefing } from "../briefings/closing";
 import { reassessMorningWatchlist } from "../briefings/post-open";
 
-export const JOB_KINDS = ["database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
+import { collectPrice } from "../market-data/collect";
+import { priceJobSchema } from "../market-data/scheduler";
+import { createYahooProvider } from "../market-data/yahoo";
+import { MarketDataError } from "../market-data/provider";
+
+export const JOB_KINDS = ["prices.collect", "database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
 const emptyPayload = z.object({}).strict();
 const analysisPayload = z.object({ limit: z.number().int().min(1).max(20).default(1) }).strict();
 const pipelinePayload = z.object({ analyze: z.boolean().default(false), analysisLimit: z.number().int().min(1).max(20).default(1) }).strict();
@@ -26,7 +31,7 @@ const briefingPayload = z.object({ sessionDate: z.string().regex(/^\d{4}-\d{2}-\
 
 export function validateJobPayload(kind: string, payload: unknown) {
   if (!(JOB_KINDS as readonly string[]).includes(kind)) throw new JobError("UNSUPPORTED_JOB_KIND", true);
-  const result = (["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
+  const result = (kind === "prices.collect" ? priceJobSchema : ["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
   if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
   return result.data;
 }
@@ -57,6 +62,20 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     signal.throwIfAborted();
   };
   return {
+    "prices.collect": async (job, signal) => {
+      const payload = priceJobSchema.safeParse(job.payload);
+      if (!payload.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
+      signal.throwIfAborted();
+      try { await collectPrice(db, createYahooProvider(), await loadMarketCalendar(), payload.data, signal); }
+      catch (error) {
+        if (error instanceof CalendarError) throw new JobError(error.code, true);
+        if (error instanceof MarketDataError) {
+          const permanent = ["INSTRUMENT_NOT_IN_UNIVERSE", "UNSUPPORTED_INSTRUMENT", "INVALID_HISTORY_DAYS"].includes(error.code) || [400, 404].includes(error.httpStatus ?? 0);
+          throw new JobError(error.code, permanent);
+        }
+        throw error;
+      }
+    },
     "briefings.morning": briefing(generateMorningBriefing),
     "briefings.closing": briefing(generateClosingBriefing),
     "briefings.reassess": briefing(reassessMorningWatchlist),

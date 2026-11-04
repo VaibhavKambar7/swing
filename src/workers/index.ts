@@ -14,6 +14,8 @@ import { scheduleMorningBriefing } from "../lib/briefings/morning";
 import { scheduleClosingBriefing } from "../lib/briefings/closing";
 import { schedulePostOpen } from "../lib/briefings/post-open";
 
+import { schedulePriceCollection } from "../lib/market-data/scheduler";
+
 const env = getEnv();
 const startedAt = new Date().toISOString();
 let stopping = false;
@@ -58,14 +60,16 @@ function scheduleTick() {
       scheduleAnnouncementRun(getDatabase(), calendar, { analyze: env.WORKER_SCHEDULER_AI_ENABLED, analysisLimit: env.WORKER_SCHEDULER_AI_LIMIT }, now),
       env.WORKER_MORNING_BRIEFING_ENABLED ? scheduleMorningBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
       env.WORKER_CLOSING_BRIEFING_ENABLED ? scheduleClosingBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
+      env.WORKER_PRICES_ENABLED ? schedulePriceCollection(getDatabase(), calendar, env.WORKER_PRICE_SYMBOLS, env.WORKER_PRICE_HISTORY_DAYS, now) : Promise.resolve({ enqueued: 0 }),
       env.WORKER_POSTOPEN_ENABLED ? schedulePostOpen(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
     ]);
-  }).then(([result, briefing, closing, postOpen]) => {
+  }).then(([result, briefing, closing, prices, postOpen]) => {
     schedulerUp = true;
     lastSchedulerTickAt = Date.now(); schedulerErrorCode = null;
     if (result.status === "enqueued") log("pipeline_scheduled", result);
     if (briefing.status === "enqueued") log("morning_briefing_scheduled", briefing);
     if (closing.status === "enqueued") log("closing_briefing_scheduled", closing);
+    if (prices.enqueued) log("price_collection_scheduled", prices);
     if (postOpen.status === "enqueued") log("post_open_scheduled", postOpen);
   }).catch((error) => {
     schedulerUp = false;

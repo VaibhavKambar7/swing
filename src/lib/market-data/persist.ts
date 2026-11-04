@@ -90,11 +90,13 @@ export async function storeMarketSnapshot(db: PrismaClient, value: unknown) {
   });
 }
 
-export async function importMarketSnapshot(db: PrismaClient, provider: MarketDataProvider, instrument: MarketInstrument, days = 30) {
+export async function importMarketSnapshot(db: PrismaClient, provider: MarketDataProvider, instrument: MarketInstrument, days = 30, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   validateHistoryDays(days);
   const symbol = nseProviderSymbol(instrument).slice(0, -3);
   if (!await db.instrument.findFirst({ where: { exchange: instrument.exchange, symbol, active: true, inUniverse: true, kind: "equity" }, select: { id: true } })) throw new MarketDataError("INSTRUMENT_NOT_IN_UNIVERSE");
-  const snapshot = await provider.getSnapshot({ exchange: "NSE", symbol }, days);
+  const snapshot = await provider.getSnapshot({ exchange: "NSE", symbol }, days, signal);
+  signal?.throwIfAborted();
   if (snapshot.provider !== provider.name || snapshot.instrument.exchange !== "NSE" || snapshot.instrument.symbol !== symbol || snapshot.requestedCalendarDays !== days) throw new MarketDataError("PROVIDER_SNAPSHOT_MISMATCH");
   return storeMarketSnapshot(db, snapshot);
 }

@@ -940,3 +940,29 @@ feedback to a version you have not reviewed. `/feedback` shows saved totals and
 the latest 50 choices. This is subjective usefulness, not return measurement or
 automatic model training. Feedback is separate from read state and source data.
 Runtime validation and migration application are deferred.
+
+## Scheduled price collection — Part 6.6
+
+Code is implemented; live provider validation remains deferred. Automatic price
+collection defaults to disabled. After validating coverage/timestamps, configure
+`WORKER_SCHEDULER_ENABLED=true`, `WORKER_PRICES_ENABLED=true`, a maintained calendar,
+and `WORKER_PRICE_SYMBOLS=TCS,INFY` (at most 20 configured active NSE equities).
+`WORKER_PRICE_HISTORY_DAYS` defaults to 7. The small explicit list is independent
+of the frontend watchlist and does not claim Nifty 500 coverage.
+
+During each known trading session, the scheduler enqueues one `prices.collect`
+job per selected stock per five-minute slot, plus two post-close slots before
+the closing report. Slot keys survive restarts and serialize scheduler replicas.
+Stocks already having pending/running/retry collection work do not build a new
+backlog. Expired scheduled jobs skip provider access; a missed polling slot cannot
+be reconstructed. Each job imports immutable observations and runs same-session
+movement detection. The existing detector atomically queues evidence linking;
+AI remains separately opt-in. Retries are bounded and provider requests respect
+worker shutdown. A delay remains unknown even when a source timestamp is recent.
+
+Per-stock collection checkpoints record actual successful imports separately
+from scheduler ticks and jobs that succeeded by skipping expired work. `/system`
+shows both times. Quote omissions and movement skip reasons remain in checkpoint
+metadata. Closing captures do not guarantee complete final exchange prices.
+The adapter remains replaceable; this adds no Kite credentials or integration.
+No live requests, migrations, builds, or tests were run for this coding subpart.
