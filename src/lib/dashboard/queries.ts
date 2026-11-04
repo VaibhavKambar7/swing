@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { getJobStatus } from "../jobs/status";
 import { WORKSPACE_OWNER, reviewState } from "./read-state";
+import { feedbackForVersion } from "./feedback";
 
 export const inboxFiltersSchema = z.object({
   kind: z.enum(["all", "announcement", "movement"]).default("all"),
@@ -88,11 +89,12 @@ export async function getBriefings(db: PrismaClient, take = 25) {
 export async function getReport(db: PrismaClient, id: string) {
   if (!z.string().uuid().safeParse(id).success) return null;
   const report = await db.dailyBriefing.findUnique({ where: { id }, include: {
+    researchFeedback: { where: { ownerKey: WORKSPACE_OWNER }, select: { contentVersion: true, useful: true, reason: true } },
     readStates: { where: { ownerKey: WORKSPACE_OWNER }, select: { contentVersion: true, readAt: true } },
     postOpenAssessments: { orderBy: [{ assessedAt: "desc" }, { id: "desc" }], take: 100,
       select: { id: true, status: true, reason: true, assessedAt: true, instrument: { select: { symbol: true } } } },
   } });
-  return report ? { ...report, ...reviewState(report.readStates, report.postOpenAssessments[0]?.id ?? report.id) } : null;
+  return report ? { ...report, feedback: feedbackForVersion(report.researchFeedback, report.postOpenAssessments[0]?.id ?? report.id), ...reviewState(report.readStates, report.postOpenAssessments[0]?.id ?? report.id) } : null;
 }
 export const stringList = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -104,10 +106,11 @@ export function safeSourceUrl(value: unknown): string | null {
 export async function getResearchDetail(db: PrismaClient, kind: string, id: string) {
   if (!["announcement", "movement"].includes(kind) || !z.string().uuid().safeParse(id).success) return null;
   if (kind === "announcement") {
-    const item = await db.feedItem.findUnique({ where: { id }, include: { readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, research: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 } } });
+    const item = await db.feedItem.findUnique({ where: { id }, include: { researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, research: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 } } });
     if (!item) return null;
     return {
       ...reviewState(item.readStates, item.research[0]?.id ?? "source"),
+      feedback: feedbackForVersion(item.researchFeedback, item.research[0]?.id ?? "source"),
       id, kind: "announcement" as const, title: item.title, symbol: item.instrument?.symbol ?? "Unmatched issuer", sourceText: item.description,
       facts: { "Published": item.publishedAt, "Discovered": item.discoveredAt, "Match checked": item.matchCheckedAt, "Filter checked": item.relevanceCheckedAt },
       meta: { "Issuer matching": item.matchStatus, "Relevance": item.relevanceStatus, "Filter reason": item.relevanceReason ?? "Not assessed", "Source": item.source },
@@ -116,12 +119,13 @@ export async function getResearchDetail(db: PrismaClient, kind: string, id: stri
     };
   }
   const item = await db.signal.findFirst({ where: { id, origin: "movement" }, include: {
-    readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, analyses: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 },
+    researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, analyses: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 },
     signalEvidence: { orderBy: { retrievedAt: "desc" }, take: 20 },
   } });
   if (!item) return null;
   return {
     ...reviewState(item.readStates, item.analyses[0]?.id ?? "source"),
+    feedback: feedbackForVersion(item.researchFeedback, item.analyses[0]?.id ?? "source"),
     id, kind: "movement" as const, title: `${item.instrument.symbol} · observed price movement`, symbol: item.instrument.symbol, sourceText: null,
     facts: { "Observed": item.observedAt, "Reference time": item.windowStart, "Stored": item.createdAt },
     meta: { "Change": item.priceChangePct ? `${item.priceChangePct.toFixed(2)}%` : "Unavailable", "Observed price": item.price?.toString() ?? "Unavailable", "Reference price": item.referencePrice?.toString() ?? "Unavailable", "Detector": item.detectorVersion },

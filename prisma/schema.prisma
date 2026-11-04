@@ -112,6 +112,7 @@ model FeedItem {
   instrument           Instrument?         @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_items_instrument_fk")
   research             FeedResearch[]
   readStates           ReadState[]
+  researchFeedback     ResearchFeedback[]
 
   @@unique([source, sourceId], map: "feed_items_source_unique")
   @@index([discoveredAt], map: "feed_items_discovered_idx")
@@ -268,6 +269,7 @@ model Signal {
   createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   readStates     ReadState[]
+  researchFeedback ResearchFeedback[]
   alerts         Alert[]          @relation("alerts_signal_id_signals_id_fk")
   analyses       Analysis[]       @relation("analyses_signal_id_signals_id_fk")
   jobs           Job[]            @relation("jobs_signal_id_signals_id_fk")
@@ -410,6 +412,7 @@ model DailyBriefing {
   markdown       String
   postOpenAssessments PostOpenAssessment[]
   readStates          ReadState[]
+  researchFeedback    ResearchFeedback[]
 
   @@unique([kind, sessionDate, reportVersion], map: "daily_briefings_session_unique")
   @@index([cutoffAt], map: "daily_briefings_cutoff_idx")
@@ -540,4 +543,26 @@ model WorkspacePreferences {
   updatedAt            DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   @@map("workspace_preferences")
+}
+
+model ResearchFeedback {
+  id              String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerKey        String @map("owner_key")
+  feedItemId      String? @map("feed_item_id") @db.Uuid
+  signalId        String? @map("signal_id") @db.Uuid
+  dailyBriefingId String? @map("daily_briefing_id") @db.Uuid
+  contentVersion  String @map("content_version")
+  useful          Boolean
+  reason          String? @db.VarChar(500)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  feedItem        FeedItem? @relation(fields: [feedItemId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "research_feedback_feed_fk")
+  signal          Signal? @relation(fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "research_feedback_signal_fk")
+  dailyBriefing   DailyBriefing? @relation(fields: [dailyBriefingId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "research_feedback_briefing_fk")
+
+  @@unique([ownerKey, feedItemId, contentVersion], map: "research_feedback_feed_unique")
+  @@unique([ownerKey, signalId, contentVersion], map: "research_feedback_signal_unique")
+  @@unique([ownerKey, dailyBriefingId, contentVersion], map: "research_feedback_briefing_unique")
+  @@index([ownerKey, updatedAt], map: "research_feedback_updated_idx")
+  @@map("research_feedback")
 }

@@ -68,7 +68,7 @@ buttons on their detail pages, unread navigation counts, and unread indicators.
 The research inbox supports unread filtering. A new research assessment or
 post-open report assessment resurfaces its parent item as unread. A stale form
 cannot mark a newer assessment read. Raw sources and research history stay intact.
-Feedback and alert preferences remain separate subparts. Migration application
+Feedback and alert preferences are described below. Migration application
 and runtime validation of review state are deferred.
 
 ## Announcement ingestion — first working slice
@@ -928,3 +928,15 @@ alerts; daily reports remain market-wide. Turning categories off hides them in
 this feed without discarding records or review history. This is frontend-only
 filtering, with no email/Telegram delivery, push notifications, or worker changes.
 Runtime verification and migration application are deferred.
+
+## Research usefulness feedback
+
+Apply `20261104062000_research_feedback`. Research and report detail pages accept
+Useful / Not useful with an optional 500-character note. Each workspace has one
+editable choice per item and reviewed version. New assessments start without
+feedback; earlier choices stay in history. Clearing feedback removes only the
+current version’s choice. A stale form asks you to refresh instead of attaching
+feedback to a version you have not reviewed. `/feedback` shows saved totals and
+the latest 50 choices. This is subjective usefulness, not return measurement or
+automatic model training. Feedback is separate from read state and source data.
+Runtime validation and migration application are deferred.
