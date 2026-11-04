@@ -1,0 +1,17 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import { getDatabase } from "@/lib/db";
+import { getReport, loadRead, safeSourceUrl, stringList } from "@/lib/dashboard/queries";
+import { Badge, DefinitionList, Header, Note, Panel, time, Unavailable } from "@/components/dashboard/components";
+export default async function Report({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const loaded = await loadRead(() => getReport(getDatabase(), id));
+  if (!loaded.ok) return <><Header title="Stored report" description="Original briefing and its recorded assessment history." /><Unavailable /></>;
+  const report = loaded.data;
+  if (!report) notFound();
+  const content = report.content && typeof report.content === "object" && !Array.isArray(report.content) ? report.content as Record<string, unknown> : {};
+  return <><Link className="back-link" href="/briefings">← Back to briefings</Link><Header eyebrow={`${report.sessionDate.toISOString().slice(0, 10)} · ${report.reportVersion}`} title={report.kind === "morning" ? "Morning briefing" : report.kind === "closing" ? "Preliminary closing summary" : "Stored report"} description={`Information cutoff ${time(report.cutoffAt)}`} />
+  <div className="detail-grid"><Panel title="Original briefing" subtitle="Stored report content; viewing does not regenerate it"><div className="report-markdown"><ReactMarkdown skipHtml urlTransform={(url) => safeSourceUrl(url) ?? ""} components={{ a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children} ↗</a> : <span>{children}</span> }}>{report.markdown}</ReactMarkdown></div></Panel><div><Panel title="Report metadata"><DefinitionList values={{ "Session": report.sessionDate.toISOString().slice(0, 10), "Version": report.reportVersion, "Window begins": time(report.windowStart), "Information cutoff": time(report.cutoffAt), "Generated": time(report.generatedAt) }} /></Panel><Panel title="Coverage notes"><div className="source-text">{stringList(content.limitations).length ? <ul>{stringList(content.limitations).map((note, i) => <li key={i}>{note}</li>)}</ul> : <p>No structured coverage notes stored. Review the report for limitations.</p>}</div></Panel></div></div>
+  <Panel title="Post-open assessment history" subtitle="Latest 100 stored revisions; timestamps identify the original evaluation">{report.postOpenAssessments.length ? <div className="table-scroll"><table><thead><tr><th>Stock</th><th>State</th><th>Reason</th><th>Assessed</th></tr></thead><tbody>{report.postOpenAssessments.map((assessment) => <tr key={assessment.id}><td className="stock-symbol">{assessment.instrument.symbol}</td><td><Badge value={assessment.status} /></td><td className="reason-cell">{assessment.reason.replaceAll("_", " ")}</td><td className="time-cell">{time(assessment.assessedAt)}</td></tr>)}</tbody></table></div> : <div className="empty-inline"><p>No post-open assessments are linked to this report.</p></div>}</Panel><Note>Price availability, source delays, and information gaps remain as recorded in the original report.</Note></>;
+}

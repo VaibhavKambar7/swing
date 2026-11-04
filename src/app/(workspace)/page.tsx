@@ -1,0 +1,19 @@
+import Link from "next/link";
+import { getDatabase } from "@/lib/db";
+import { collectionState, getInbox, getOverview, inboxFiltersSchema, loadRead } from "@/lib/dashboard/queries";
+import { Badge, DefinitionList, Empty, Header, InboxTable, Metric, Note, Panel, time, Unavailable } from "@/components/dashboard/components";
+export default async function Overview() {
+  const loaded = await loadRead(async () => {
+    const db = getDatabase();
+    const [overview, inbox] = await Promise.all([getOverview(db), getInbox(db, inboxFiltersSchema.parse({}), 6)]);
+    return { overview, inbox };
+  });
+  return <><Header eyebrow="THE BIGGER PICTURE" title="Research, with context." description="Company announcements, observed moves, and the evidence behind them." />
+    {!loaded.ok ? <Unavailable /> : (() => { const { overview: data, inbox } = loaded.data; const sourceState = collectionState(data.queue.lastPipelineCompletedAt); return <>
+      <div className="metrics-grid"><Metric label="Tracked stocks" value={data.stocks} note="Active stocks in your universe" /><Metric label="Recorded items" value={data.announcements + data.movements} note={`${data.announcements} announcements · ${data.movements} moves`} /><Metric label="Awaiting research" value={data.pending} note="Matched filings kept for research" accent /><Metric label="Failed jobs" value={data.queue.counts.failed} note={`${data.queue.dueJobs} jobs currently due`} /></div>
+      <div className="overview-grid"><Panel title="Latest research" subtitle="Your most recently recorded announcements and movements" action={<Link className="text-link" href="/inbox">View inbox ↗</Link>}><InboxTable items={inbox.items} compact /></Panel>
+      <Panel title="Collection status" subtitle="Freshness is not completeness"><div className="source-status"><div className="source-logo">N</div><div><strong>Company announcements</strong><p>NSE RSS collection</p></div><Badge value={sourceState} /></div><DefinitionList values={{ "Last pipeline success": time(data.queue.lastPipelineCompletedAt), "Latest filing stored": time(data.lastFiling?.discoveredAt), "Last quote observed": time(data.lastQuote?.quoteTime), "Queue": `${data.queue.counts.running} running · ${data.queue.counts.retry} retrying` }} /><div className="panel-bottom"><Link className="text-link" href="/system">Inspect system status ↗</Link></div></Panel></div>
+      <div className="overview-grid lower-grid"><Panel title="Daily briefings" subtitle="Stored reports, with their original information cutoffs" action={<Link className="text-link" href="/briefings">All briefings ↗</Link>}>{data.briefings.length ? <div className="report-list">{data.briefings.map((report) => <Link href={`/briefings/${report.id}`} className="report-row" key={report.id}><span className="report-symbol">{report.kind === "morning" ? "☀" : "◐"}</span><div><strong>{report.kind === "morning" ? "Morning briefing" : "Preliminary closing summary"}</strong><span>{report.sessionDate.toISOString().slice(0, 10)} · cutoff {time(report.cutoffAt)}</span></div><span>↗</span></Link>)}</div> : <Empty title="No briefings stored yet">Generated morning and closing reports will appear here.</Empty>}</Panel>
+      <Panel title="Needs attention" subtitle="Failures are separate from unassessed research">{data.queue.recentFailures.length ? <div className="failure-list">{data.queue.recentFailures.slice(0, 3).map((job) => <div key={job.id}><Badge value="failed" /><strong>{job.kind}</strong><span>{job.lastErrorCode}</span></div>)}</div> : <div className="quiet-state"><span aria-hidden="true">✓</span><h3>No failed jobs recorded</h3><p>This reflects stored job results, not a guarantee that live sources are available.</p></div>}</Panel></div><Note>Information is read from stored records when you load or refresh this page. Opening the dashboard does not collect data or run research.</Note>
+    </>; })()}</>;
+}

@@ -37,6 +37,33 @@ npm run worker:dev
 
 Open [Swing](http://localhost:3000). Without PostgreSQL, the web page and liveness checks still work; readiness reports HTTP 503, and the worker retries its database check every 10 seconds.
 
+## Read-only research workspace
+
+Run `npm run dev` and open `http://localhost:3000`. The UI reads your existing
+Prisma database. It does not require provider credentials, fetch announcements
+or prices, run AI, enqueue jobs, or change read/feedback state.
+
+- `/`: overview, recent records, collection recency, reports, and failures.
+- `/inbox`: announcements and movement signals with stock, type, priority, and
+  page filters; each item is filtered against its latest stored assessment.
+- `/inbox/announcement/:id` and `/inbox/movement/:id`: source links, descriptions,
+  research history, risks, uncertainties, and timestamps.
+- `/briefings` and `/briefings/:id`: stored morning/closing Markdown reports and
+  linked post-open assessment history. These views never regenerate reports.
+- `/system`: database readability, a bounded read of worker `/health/status`,
+  job state/failures, and source timestamps. No jobs are retried or recovered.
+
+Missing records, unassessed research, stale/unknown collection, database errors,
+and an unreachable worker have separate states. Source times are displayed in
+IST. Collection recency is not source completeness or a guarantee of live data.
+The UI never replaces unavailable data with fixtures. Source HTML is displayed
+as text, report HTML is not enabled, and source links permit HTTP(S) only.
+
+This slice uses the application's local loopback access and does not add browser
+sign-in. It is read-only: the website inbox is a research-record view, not yet
+an alert-delivery or read/unread system. User preferences, feedback controls and
+read-state persistence remain separate coding steps. No new migration is needed.
+
 ## Announcement ingestion — first working slice
 
 Apply the new inbox migration, then fetch once:

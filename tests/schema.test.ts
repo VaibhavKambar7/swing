@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { filterStoredAnnouncements, RELEVANCE_RULE_VERSION } from "../src/lib/announcements/filter";
+import { getInbox, getOverview, getResearchDetail, getReport, inboxFiltersSchema } from "../src/lib/dashboard/queries";
 import { storeAnnouncements } from "../src/lib/announcements/ingest";
 import { matchStoredAnnouncements } from "../src/lib/announcements/match";
 import { seedStarterUniverse } from "../src/lib/instruments/starter-universe";
@@ -96,6 +97,43 @@ async function rejectsConstraint(query: PromiseLike<unknown>, constraint: string
 }
 
 describe("Prisma migration and research data", () => {
+  it("reads a unified inbox using latest research, parameterized filters, and stable pagination", async () => {
+    const tcs = await db.instrument.create({ data: { exchange: "NSE", symbol: "TCS", name: "TCS", inUniverse: true } });
+    const item = await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "dashboard", title: "TCS - Results", url: "https://example.com/results", instrumentId: tcs.id, matchStatus: "matched", discoveredAt: new Date("2026-11-03T05:00:00Z") } });
+    const research = { feedItemId: item.id, provider: "fixture", model: "fixture", promptVersion: "v1", inputSnapshot: {}, summary: "Older assessment", significance: "Fixture", risks: ["Unverified"], uncertainties: ["Missing context"], evidence: [] };
+    await db.feedResearch.create({ data: { ...research, inputHash: "old", classification: "INVESTIGATE", createdAt: new Date("2026-11-03T05:01:00Z") } });
+    await db.feedResearch.create({ data: { ...research, inputHash: "new", classification: "IGNORE", summary: "Latest assessment", createdAt: new Date("2026-11-03T05:02:00Z") } });
+    const movementRecord = await db.signal.create({ data: { ...movement(tcs.id), dedupeKey: "dashboard-move", createdAt: new Date("2026-11-03T05:03:00Z") } });
+    await db.analysis.create({ data: { signalId: movementRecord.id, provider: "fixture", model: "fixture", promptVersion: "v1", summary: "Observed move", assessment: { classification: "WATCH", significance: "Unknown cause" } } });
+    const filters = inboxFiltersSchema.parse({});
+    const first = await getInbox(db, filters, 1);
+    expect(first.total).toBe(2);
+    expect(first.items[0]).toMatchObject({ kind: "movement", classification: "WATCH", symbol: "TCS" });
+    expect((await getInbox(db, { ...filters, page: 2 }, 1)).items[0]).toMatchObject({ kind: "announcement", classification: "IGNORE", summary: "Latest assessment", eventAt: null });
+    expect((await getInbox(db, { ...filters, classification: "INVESTIGATE" })).total).toBe(0);
+    expect((await getInbox(db, { ...filters, stock: "TCS", classification: "WATCH" })).total).toBe(1);
+    expect((await getInbox(db, { ...filters, stock: "INFY" })).total).toBe(0);
+    expect((await getInbox(db, { ...filters, kind: "announcement" })).items).toHaveLength(1);
+    const detail = await getResearchDetail(db, "announcement", item.id);
+    expect(detail?.research[0].summary).toBe("Latest assessment");
+    expect(await db.feedResearch.count()).toBe(2);
+    expect(await db.job.count()).toBe(0);
+    expect(await db.feedItem.count()).toBe(1);
+  });
+  it("retains unmatched and unassessed items and returns safe missing-record results", async () => {
+    await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "unmatched-dashboard", title: "Unknown - Update", url: "https://example.com/unmatched" } });
+    const result = await getInbox(db, inboxFiltersSchema.parse({ classification: "PENDING" }));
+    expect(result.items[0]).toMatchObject({ symbol: null, classification: "PENDING", summary: null });
+    expect(await getResearchDetail(db, "announcement", "invalid-id")).toBeNull();
+    expect(await getResearchDetail(db, "unsupported", "2db4cdf2-9478-4929-b0c9-a76f6c0eed27")).toBeNull();
+    expect(await getReport(db, "invalid-id")).toBeNull();
+    const before = await db.feedItem.findFirstOrThrow();
+    const overview = await getOverview(db);
+    expect(overview.announcements).toBe(1);
+    expect(overview.lastQuote).toBeNull();
+    expect(overview.queue.lastPipelineCompletedAt).toBeNull();
+    expect(await db.feedItem.findFirstOrThrow()).toEqual(before);
+  });
   const reassessmentCalendar = parseCalendar({ source: "Synthetic", coverageStart: "2026-11-02", coverageEnd: "2026-11-04", holidays: [], specialSessions: [] });
   async function reassessmentMorning() {
     await seedStarterUniverse(db);

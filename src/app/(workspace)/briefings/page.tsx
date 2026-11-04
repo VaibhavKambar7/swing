@@ -1,0 +1,10 @@
+import Link from "next/link";
+import { getDatabase } from "@/lib/db";
+import { getBriefings, loadRead } from "@/lib/dashboard/queries";
+import { Badge, Empty, Header, Note, Panel, time, Unavailable } from "@/components/dashboard/components";
+export default async function Briefings() {
+  const loaded = await loadRead(() => getBriefings(getDatabase()));
+  return <><Header eyebrow="DAILY PERSPECTIVE" title="Daily briefings" description="Morning watchlists, preliminary closing summaries, and post-open assessment history." />
+  {!loaded.ok ? <Unavailable /> : <Panel title="Stored reports" subtitle="Latest 25 reports · cutoffs and original generation times stay visible">{loaded.data.length ? <div className="table-scroll"><table><thead><tr><th>Session</th><th>Report</th><th>Information cutoff</th><th>Generated</th><th>Reassessments</th><th /></tr></thead><tbody>{loaded.data.map((report) => <tr key={report.id}><td className="stock-symbol">{report.sessionDate.toISOString().slice(0, 10)}</td><td><Link className="item-title" href={`/briefings/${report.id}`}>{report.kind === "morning" ? "Morning briefing" : report.kind === "closing" ? "Preliminary closing summary" : "Stored report"}</Link><span className="cell-caption">{report.reportVersion}</span></td><td className="time-cell">{time(report.cutoffAt)}</td><td className="time-cell">{time(report.generatedAt)}</td><td><Badge value="unknown" label={String(report._count.postOpenAssessments)} /></td><td><Link className="arrow-link" href={`/briefings/${report.id}`} aria-label={`Open ${report.kind} report for ${report.sessionDate.toISOString().slice(0, 10)}`}>↗</Link></td></tr>)}</tbody></table></div> : <Empty title="Your reports will live here">No reports are stored yet. Morning and closing generation is separate from viewing this page.</Empty>}</Panel>}
+  <Note>Reports reflect stored information available by their cutoff. A report generated late does not imply it was available before market opening.</Note></>;
+}
