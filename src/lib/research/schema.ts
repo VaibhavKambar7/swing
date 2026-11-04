@@ -17,7 +17,7 @@ export type ResearchAssessment = z.infer<typeof researchSchema>;
 
 export type ResearchInput = {
   stock: { exchange: string; symbol: string; name: string };
-  announcement: { title: string; description: string | null; url: string; publishedAt: string | null; discoveredAt: string };
+  announcement: { source?: string; evidenceKind?: string; title: string; description: string | null; url: string; publishedAt: string | null; discoveredAt: string };
   relevance: { status: string; reason: string | null; ruleVersion: string | null };
   contentTruncated: boolean;
 };
@@ -29,7 +29,7 @@ export type ResearchResult = {
 export type MovementResearchInput = {
   stock: { exchange: string; symbol: string; name: string };
   movement: { signalId: string; observedAt: string; referenceAt: string; price: string; referencePrice: string; changePct: string; priceAgeAtResearchSeconds: number; source: string; providerSymbol: string; delayStatus: string; sourceSnapshotIds: string[] };
-  evidence: { id: string; kind: "market_observation" | "official_announcement"; title: string; url: string | null; description: string | null; publishedAt: string | null; discoveredAt: string | null; timing: string; knownAtMove: boolean | null }[];
+  evidence: { id: string; kind: "market_observation" | "official_announcement" | "news"; title: string; url: string | null; description: string | null; publishedAt: string | null; discoveredAt: string | null; timing: string; knownAtMove: boolean | null }[];
   researchedAt: string;
   contentTruncated: boolean;
 };

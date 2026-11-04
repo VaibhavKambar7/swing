@@ -1,5 +1,4 @@
 import type { PrismaClient } from "../../generated/prisma/client";
-import { NSE_SOURCE } from "./rss";
 
 export const RELEVANCE_RULE_VERSION = "announcement-noise-v1";
 export type RelevanceDecision = {
@@ -59,7 +58,6 @@ export function classifyAnnouncementRelevance(input: { title: string; descriptio
 export async function filterStoredAnnouncements(db: PrismaClient, now: () => Date = () => new Date()) {
   const counts = { keep: 0, routine: 0, review: 0 };
   const eligible = {
-    source: NSE_SOURCE,
     matchStatus: "matched" as const,
     instrument: { exchange: "NSE", kind: "equity" as const, active: true, inUniverse: true },
     OR: [

@@ -13,6 +13,7 @@ export class AnnouncementFeedError extends Error {
 
 export type FeedEntry = {
   sourceId: string;
+  issuerCode?: string | null;
   title: string;
   url: string;
   description: string | null;
@@ -72,6 +73,7 @@ export function parseAnnouncements(xml: string): { items: FeedEntry[]; skipped: 
 export async function fetchAnnouncements(
   fetcher: typeof fetch = fetch,
   feedUrl = process.env.NSE_ANNOUNCEMENTS_URL ?? NSE_ANNOUNCEMENTS_URL,
+  signal?: AbortSignal,
 ) {
   const url = URL.parse(feedUrl);
   if (!url || url.protocol !== "https:" || url.username || url.password || url.hash) {
@@ -80,7 +82,7 @@ export async function fetchAnnouncements(
   try {
     const response = await fetcher(url.href, {
       headers: { Accept: "application/rss+xml, application/xml, text/xml" },
-      signal: AbortSignal.timeout(15000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
       redirect: "error",
     });
     if (!response.ok) {

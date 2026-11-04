@@ -1,7 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client";
 import { CalendarError, getMarketDay, getMarketState, marketDate, type MarketCalendar } from "../market/calendar";
 import { BriefingError } from "./morning";
-import { NSE_SOURCE } from "../announcements/rss";
 import { RELEVANCE_RULE_VERSION } from "../announcements/filter";
 import { RESEARCH_PROMPT_VERSION } from "../research/schema";
 import { MOVEMENT_RESEARCH_VERSION } from "../research/movement";
@@ -59,7 +58,7 @@ export async function generateClosingBriefing(db: PrismaClient, calendar: Market
     const prior = await tx.dailyBriefing.findUnique({ where: { kind_sessionDate_reportVersion: identity } });
     if (prior) return { status: "existing", report: prior };
     const universe = { active: true, inUniverse: true, exchange: "NSE", kind: "equity" as const };
-    const filingWhere = { source: NSE_SOURCE, matchStatus: "matched" as const, instrument: universe,
+    const filingWhere = { matchStatus: "matched" as const, instrument: universe,
       matchCheckedAt: { lte: window.cutoffAt }, relevanceCheckedAt: { lte: window.cutoffAt },
       relevanceStatus: { in: ["keep" as const, "review" as const] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
       discoveredAt: { lte: window.cutoffAt }, publishedAt: { gte: window.windowStart, lte: window.cutoffAt } };

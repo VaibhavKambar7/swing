@@ -1094,3 +1094,18 @@ collection pipeline but never generate stock movement signals.
 
 `MARKET_DATA_PROVIDER` selects the shared adapter boundary. Yahoo experimental is
 implemented; choosing `kite` fails explicitly because Kite remains deferred.
+
+## Configured sources
+
+`/sources` enables NSE/BSE and creates Google News RSS searches (at most 20
+configured sources). The announcement pipeline collects enabled sources one at
+a time, preserves successful imports when another source fails, matches and
+filters those imports, then reports a partial collection failure for retry.
+Per-source checkpoints expose safe errors and actual successful storage times.
+BSE uses the official announcements JSON endpoint and configured scrip codes;
+its bounded current-IST-day five-page window is not historical coverage.
+News uses Google's RSS search request with your query; matching requires a unique
+headline symbol/full name, and news remains unverified third-party evidence.
+No source is silently substituted on failure. All source adapters have bounded
+responses/timeouts and retain unknown publication dates. Live endpoint shape,
+access and coverage still require your later validation.

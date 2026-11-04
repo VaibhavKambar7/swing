@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { PrismaClient } from "../../generated/prisma/client";
-import { NSE_SOURCE } from "../announcements/rss";
 import { RELEVANCE_RULE_VERSION } from "../announcements/filter";
 import { ResearchError, researchSchemaFor, type MovementResearchInput, type ResearchProvider } from "./schema";
 
@@ -25,7 +24,7 @@ async function movementInput(db: PrismaClient, signalId: string, at: Date) {
       !current.quotePrice.eq(signal.price) || !reference.quotePrice.eq(signal.referencePrice) || current.quoteTime.getTime() !== signal.observedAt.getTime() || reference.quoteTime.getTime() !== signal.windowStart.getTime()) throw new ResearchError("movement_sources_mismatch");
   const upper = new Date(Math.min(at.getTime(), signal.observedAt.getTime() + 30 * 60000));
   const filings = await db.feedItem.findMany({ where: {
-    instrumentId: signal.instrumentId, source: NSE_SOURCE, matchStatus: "matched",
+    instrumentId: signal.instrumentId, matchStatus: "matched",
     relevanceStatus: { in: ["keep", "review"] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
     publishedAt: { gte: new Date(signal.observedAt.getTime() - 86400000), lte: upper }, discoveredAt: { lte: at },
   }, orderBy: [{ publishedAt: "desc" }, { id: "asc" }], take: 30 });
@@ -40,7 +39,7 @@ async function movementInput(db: PrismaClient, signalId: string, at: Date) {
     evidence: [
       { id: "movement", kind: "market_observation", title: "Stored same-session quote movement", url: null, description: null,
         publishedAt: signal.observedAt.toISOString(), discoveredAt: null, timing: "observed_price_event", knownAtMove: null },
-      ...selected.map((entry) => ({ id: `announcement:${entry.id}`, kind: "official_announcement" as const, title: entry.title.slice(0, 2000), url: entry.url,
+      ...selected.map((entry) => ({ id: `announcement:${entry.id}`, kind: entry.source.startsWith("news-search:") ? "news" as const : "official_announcement" as const, title: entry.title.slice(0, 2000), url: entry.url,
         description: entry.description?.slice(0, 4000) ?? null, publishedAt: entry.publishedAt!.toISOString(), discoveredAt: entry.discoveredAt.toISOString(),
         timing: entry.publishedAt! > signal.observedAt ? "published_after_move" : "published_before_or_at_move",
         knownAtMove: entry.publishedAt! <= signal.observedAt && entry.discoveredAt <= signal.observedAt })),
@@ -61,7 +60,7 @@ function fingerprint(input: MovementResearchInput) {
 export async function researchMovement(db: PrismaClient, signalId: string, provider?: ResearchProvider, at = new Date()) {
   const { input, selected } = await movementInput(db, signalId, at);
   const linked = selected.length ? await db.signalEvidence.createMany({ data: selected.map((entry) => ({
-    signalId, kind: "official_announcement", url: entry.url, title: entry.title, publisher: "NSE RSS",
+    signalId, kind: entry.source.startsWith("news-search:") ? "news" : "official_announcement", url: entry.url, title: entry.title, publisher: entry.source,
     excerpt: entry.description?.slice(0, 4000) ?? null, publishedAt: entry.publishedAt, retrievedAt: at,
     contentHash: createHash("sha256").update(JSON.stringify([entry.id, entry.title, entry.description, entry.publishedAt])).digest("hex"),
   })), skipDuplicates: true }) : { count: 0 };

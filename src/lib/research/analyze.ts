@@ -1,18 +1,17 @@
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { RELEVANCE_RULE_VERSION } from "../announcements/filter";
-import { NSE_SOURCE } from "../announcements/rss";
 import { RESEARCH_PROMPT_VERSION, ResearchError, researchSchema, type ResearchInput, type ResearchProvider } from "./schema";
 
 const eligible = {
-  source: NSE_SOURCE, matchStatus: "matched" as const,
+  matchStatus: "matched" as const,
   relevanceStatus: { in: ["keep" as const, "review" as const] },
   relevanceRuleVersion: RELEVANCE_RULE_VERSION,
   instrument: { exchange: "NSE", kind: "equity" as const, active: true, inUniverse: true },
 };
 
 type SourceItem = {
-  title: string; description: string | null; url: string;
+  source?: string; title: string; description: string | null; url: string;
   publishedAt: Date | null; discoveredAt: Date;
   relevanceStatus: string; relevanceReason: string | null; relevanceRuleVersion: string | null;
   instrument: { exchange: string; symbol: string; name: string } | null;
@@ -23,6 +22,7 @@ export function buildResearchInput(item: SourceItem): ResearchInput {
   return {
     stock: { exchange: item.instrument.exchange, symbol: item.instrument.symbol, name: item.instrument.name },
     announcement: {
+      source: item.source, evidenceKind: item.source?.startsWith("news-search:") ? "news" : "official_announcement",
       title: item.title.slice(0, 2000), description: item.description?.slice(0, 20000) ?? null,
       url: item.url, publishedAt: item.publishedAt?.toISOString() ?? null, discoveredAt: item.discoveredAt.toISOString(),
     },

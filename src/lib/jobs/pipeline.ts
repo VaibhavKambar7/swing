@@ -1,6 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client";
-import { fetchAnnouncements, AnnouncementFeedError } from "../announcements/rss";
-import { storeAnnouncements } from "../announcements/ingest";
+import { AnnouncementFeedError } from "../announcements/rss";
+import { collectEnabledSources } from "../announcements/sources";
 import { matchStoredAnnouncements } from "../announcements/match";
 import { filterStoredAnnouncements } from "../announcements/filter";
 import { analyzeStoredAnnouncements } from "../research/analyze";
@@ -10,7 +10,7 @@ import { JobError } from "./queue";
 
 export function createPipelineStages(db: PrismaClient) {
   return {
-    fetch: async () => storeAnnouncements(db, (await fetchAnnouncements()).items),
+    fetch: async () => collectEnabledSources(db),
     match: () => matchStoredAnnouncements(db),
     filter: () => filterStoredAnnouncements(db),
     analyze: (limit: number) => analyzeStoredAnnouncements(db, createGeminiProvider(), limit),
@@ -24,7 +24,7 @@ export async function runAnnouncementPipeline(
   let stage = "fetch";
   try {
     signal.throwIfAborted();
-    await stages.fetch();
+    const fetched = await stages.fetch();
     stage = "match"; signal.throwIfAborted();
     await stages.match();
     stage = "filter"; signal.throwIfAborted();
@@ -34,6 +34,7 @@ export async function runAnnouncementPipeline(
       const result = await stages.analyze(options.analysisLimit);
       if (result.failed) throw new JobError("PIPELINE_ANALYZE_FAILED");
     }
+    if ("failed" in fetched && fetched.failed) throw new JobError("PIPELINE_SOURCE_COLLECTION_FAILED");
     signal.throwIfAborted();
   } catch (error) {
     if (error instanceof JobError) throw error;

@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTransition } from "react";
-const links = [["/", "Overview", "◫"], ["/alerts", "Alerts", "◈"], ["/inbox", "Research inbox", "▤"], ["/briefings", "Daily briefings", "▥"], ["/universe", "Universe", "◎"], ["/watchlist", "Watchlist", "☆"], ["/settings", "Alert preferences", "⚙"], ["/feedback", "Feedback", "♡"], ["/outcomes", "Research follow-ups", "↗"], ["/system", "System status", "◉"]];
+const links = [["/", "Overview", "◫"], ["/alerts", "Alerts", "◈"], ["/inbox", "Research inbox", "▤"], ["/briefings", "Daily briefings", "▥"], ["/sources", "Sources", "⊕"], ["/universe", "Universe", "◎"], ["/watchlist", "Watchlist", "☆"], ["/settings", "Alert preferences", "⚙"], ["/feedback", "Feedback", "♡"], ["/outcomes", "Research follow-ups", "↗"], ["/system", "System status", "◉"]];
 export function Navigation({ unread }: { unread?: { research: number; briefings: number } }) {
   const path = usePathname();
   return <nav aria-label="Main navigation">{links.map(([href, title, icon]) => {

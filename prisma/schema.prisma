@@ -97,6 +97,7 @@ model FeedItem {
   id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   source               String
   sourceId             String              @map("source_id")
+  issuerCode           String?             @map("issuer_code")
   title                String
   url                  String
   description          String?
@@ -627,4 +628,14 @@ model UniverseImport {
   members Json @db.JsonB
   contentHash String @unique @map("content_hash")
   @@map("universe_imports")
+}
+
+model FeedSource {
+ id String @id
+ name String
+ kind String
+ query String?
+ enabled Boolean @default(false)
+ updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+ @@map("feed_sources")
 }

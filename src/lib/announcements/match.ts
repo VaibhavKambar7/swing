@@ -1,7 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client";
-import { NSE_SOURCE } from "./rss";
 
-type MatchInstrument = { id: string; symbol: string; name: string };
+type MatchInstrument = { id: string; symbol: string; name: string; bseCode?: string | null };
 export type StockMatch =
   | { status: "matched"; instrumentId: string }
   | { status: "unmatched" | "ambiguous"; instrumentId: null };
@@ -34,19 +33,25 @@ export function matchAnnouncement(title: string, instruments: MatchInstrument[])
 export async function matchStoredAnnouncements(db: PrismaClient) {
   const instruments = await db.instrument.findMany({
     where: { exchange: "NSE", kind: "equity", active: true, inUniverse: true },
-    select: { id: true, symbol: true, name: true },
+    select: { id: true, symbol: true, name: true, bseCode: true },
   });
   if (!instruments.length) throw new Error("No active NSE stocks in the universe; seed or configure stocks first");
   const counts = { matched: 0, unmatched: 0, ambiguous: 0 };
   let cursor: string | undefined;
   while (true) {
     const items = await db.feedItem.findMany({
-      where: { source: NSE_SOURCE, matchStatus: { not: "matched" }, ...(cursor ? { id: { gt: cursor } } : {}) },
-      orderBy: { id: "asc" }, take: 100, select: { id: true, title: true },
+      where: { matchStatus: { not: "matched" }, ...(cursor ? { id: { gt: cursor } } : {}) },
+      orderBy: { id: "asc" }, take: 100, select: { id: true, title: true, source: true, issuerCode: true },
     });
     if (!items.length) break;
     for (const item of items) {
-      const match = matchAnnouncement(item.title, instruments);
+      const codes = item.issuerCode ? instruments.filter((i) => i.bseCode === item.issuerCode) : [];
+      const newsCandidates = item.source.startsWith("news-search:") ? instruments.filter((i) => {
+        const title = ` ${normalize(item.title)} `;
+        return title.includes(` ${normalize(i.name)} `) || (i.symbol.length >= 3 && title.includes(` ${normalize(i.symbol)} `));
+      }) : [];
+      const candidates = item.issuerCode ? codes : item.source.startsWith("news-search:") ? newsCandidates : null;
+      const match: StockMatch = candidates ? candidates.length === 1 ? { status: "matched", instrumentId: candidates[0].id } : { status: candidates.length ? "ambiguous" : "unmatched", instrumentId: null } : matchAnnouncement(item.title, instruments);
       const result = await db.feedItem.updateMany({
         // A concurrent run must not overwrite an already established match.
         where: { id: item.id, matchStatus: { not: "matched" } },

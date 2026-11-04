@@ -60,7 +60,7 @@ export async function generateMorningBriefing(db: PrismaClient, calendar: Market
     const prior = await tx.dailyBriefing.findUnique({ where: { kind_sessionDate_reportVersion: identity } });
     if (prior) return { status: "existing", report: prior };
     const eligible = {
-      source: NSE_SOURCE, matchStatus: "matched" as const,
+      matchStatus: "matched" as const,
       instrument: { active: true, inUniverse: true, exchange: "NSE", kind: "equity" as const },
       matchCheckedAt: { lte: window.cutoffAt }, relevanceCheckedAt: { lte: window.cutoffAt },
       relevanceStatus: { in: ["keep" as const, "review" as const] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
@@ -90,7 +90,7 @@ export async function generateMorningBriefing(db: PrismaClient, calendar: Market
     const content = {
       sessionDate: date, cutoffAt: window.cutoffAt.toISOString(), windowStart: window.windowStart.toISOString(), windowBasis: window.windowBasis,
       generatedAt: at.toISOString(), generatedAfterOpen: at >= window.opensAt,
-      coverage: { universeCount, source: NSE_SOURCE, collectionStatus, lastPipelineCompletedAt: lastSuccess?.toISOString() ?? null,
+      coverage: { universeCount, collectionStatus, lastPipelineCompletedAt: lastSuccess?.toISOString() ?? null,
         externalNews: "not_configured", earningsCalendar: "not_configured", globalMarkets: "not_configured", priceOutlook: "not_provided" },
       totalEligibleFilings: total, undatedFilingsExcluded: undatedCount, omittedFilings: total - items.length,
       watchlist: items.filter((entry) => entry.classification !== "IGNORE"), filings: items,
