@@ -15,7 +15,7 @@ export async function comparisonChange(db: PrismaClient, calendar: MarketCalenda
   const [reference, observed] = await Promise.all([get(start), get(end)]);
   if (!reference?.quoteTime || !reference.quotePrice || !observed?.quoteTime || !observed.quotePrice) return { status: "unavailable" as const, reason: "ALIGNED_INDEX_QUOTES_MISSING", symbol: instrument.symbol };
   if (reference.providerSymbol !== observed.providerSymbol || reference.quoteTime >= observed.quoteTime || reference.retrievedAt < reference.quoteTime || observed.retrievedAt < observed.quoteTime) return { status: "unavailable" as const, reason: "INCOMPATIBLE_INDEX_QUOTES" };
-  for (const [_target, quote] of [[start, reference], [end, observed]] as const) {
+  for (const quote of [reference, observed]) {
     const state = getMarketState(calendar, quote.quoteTime!);
     if (state.status !== "open" || !state.currentSession || quote.quoteTime! < new Date(state.currentSession.opensAt)) return { status: "unavailable" as const, reason: "INDEX_QUOTES_OUTSIDE_SESSION" };
   }
@@ -33,9 +33,10 @@ export function volatilityComparison(changes: number[], current: number, session
 export async function buildMarketContext(db: PrismaClient, calendar: MarketCalendar, stock: { id: string; benchmarkId: string | null; sectorIndexId: string | null }, provider: string, start: Date, end: Date, changePct: string, at: Date) {
   const [benchmark, sector, history] = await Promise.all([
     comparisonChange(db, calendar, stock.benchmarkId, start, end, at, provider), comparisonChange(db, calendar, stock.sectorIndexId, start, end, at, provider),
-    db.marketSnapshotRecord.findMany({ where: { instrumentId: stock.id, provider, currency: "INR", quoteFreshness: "recent", quotePrice: { not: null }, quoteAgeSeconds: { gte: 0, lte: 300 }, quoteTime: { gte: new Date(end.getTime() - 30 * 86400000), lt: new Date(`${marketDate(end)}T00:00:00+05:30`) }, recordedAt: { lte: at }, retrievedAt: { lte: at } }, orderBy: [{ quoteTime: "asc" }, { retrievedAt: "asc" }], take: 5000 }),
+    db.marketSnapshotRecord.findMany({ where: { instrumentId: stock.id, provider, currency: "INR", quoteFreshness: "recent", quotePrice: { not: null }, quoteAgeSeconds: { gte: 0, lte: 300 }, quoteTime: { gte: new Date(end.getTime() - 30 * 86400000), lt: new Date(`${marketDate(end)}T00:00:00+05:30`) }, recordedAt: { lte: at }, retrievedAt: { lte: at } }, orderBy: [{ quoteTime: "desc" }, { retrievedAt: "desc" }, { id: "desc" }], take: 5000 }),
   ]);
   const relative = (comparison: typeof benchmark) => comparison.status === "observed" ? { ...comparison, excessChangePercentagePoints: new Calc(changePct).minus(comparison.changePct!).toFixed(8) } : comparison;
+  history.reverse();
   const unique = history.filter((q, i, all) => q.quoteTime && q.quotePrice && q.retrievedAt >= q.quoteTime && (i === 0 || q.quoteTime.getTime() !== all[i - 1].quoteTime?.getTime()));
   const changes: number[] = [], ids: string[][] = []; const sessions = new Set<string>();
   // Non-overlapping same-session 5–6 minute quote pairs, never daily volatility.

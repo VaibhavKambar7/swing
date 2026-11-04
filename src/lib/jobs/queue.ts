@@ -75,12 +75,13 @@ export async function renewJobLease(db: PrismaClient, job: ClaimedJob) {
 export async function finishJob(db: PrismaClient, job: ClaimedJob, error?: JobError) {
   const failed = !!error && (error.permanent || job.attempts >= job.maxAttempts);
   const status = error ? (failed ? "failed" : "retry") : "succeeded";
-  const count = await db.$executeRaw`
+  const rows = await db.$queryRaw<{ status: string }[]>`
     UPDATE jobs SET status = CASE WHEN cancel_requested_at IS NOT NULL THEN 'failed'::job_status ELSE ${status}::job_status END,
       completed_at = CASE WHEN cancel_requested_at IS NOT NULL OR ${status} IN ('succeeded', 'failed') THEN clock_timestamp() ELSE NULL END,
       run_after = CASE WHEN ${status} = 'retry' THEN clock_timestamp() + ${retryDelayMs(job.attempts)} * interval '1 millisecond' ELSE run_after END,
       locked_by = NULL, locked_until = NULL, last_error_code = CASE WHEN cancel_requested_at IS NOT NULL THEN 'JOB_CANCELLED' ELSE ${error?.code ?? null} END, updated_at = clock_timestamp()
     WHERE id = ${job.id}::uuid AND status = 'running' AND locked_by = ${job.lockedBy} AND locked_until > clock_timestamp()
+    RETURNING status::text
   `;
-  return count === 1 ? status : "lease_lost";
+  return rows[0]?.status ?? "lease_lost";
 }

@@ -19,7 +19,7 @@ export async function getPriceCoverage(db: PrismaClient, selected: string[], at 
   const rows = stocks.map((stock) => {
     const checkpoint = checkpointsBySymbol.get(stock.symbol);
     const quote = stock.marketSnapshots[0] ?? null;
-    return { id: stock.id, symbol: stock.symbol, name: stock.name, selected: selected.includes(stock.symbol), quote,
+    return { id: stock.id, symbol: stock.symbol, name: stock.name, selected: !selected.length || selected.includes(stock.symbol), quote,
       recency: quoteRecency(quote, at), lastAttemptAt: checkpoint?.lastAttemptAt ?? null, lastSuccessAt: checkpoint?.lastSuccessAt ?? null,
       lastErrorCode: checkpoint?.lastErrorCode ? publicErrorCode(checkpoint.lastErrorCode) : null,
     };

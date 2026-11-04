@@ -48,7 +48,7 @@ function runtimeStatus() {
     ready: !stopping && databaseReady && jobsReady && schedulerReady,
     checks: { database: databaseReady ? "up" : "down", jobs: jobsReady ? "up" : "down", scheduler: !env.WORKER_SCHEDULER_ENABLED ? "disabled" : schedulerReady ? "up" : "down" },
     startedAt, activeJob: activeJobInfo,
-    priceMonitoring: { enabled: env.WORKER_SCHEDULER_ENABLED && env.WORKER_PRICES_ENABLED, symbols: env.WORKER_PRICE_SYMBOLS },
+    priceMonitoring: { enabled: env.WORKER_SCHEDULER_ENABLED && env.WORKER_PRICES_ENABLED, symbols: env.WORKER_PRICE_SYMBOLS, batchSize: env.WORKER_PRICE_BATCH_SIZE, slotMs: env.WORKER_PRICE_SLOT_MS, requestIntervalMs: env.WORKER_PRICE_REQUEST_INTERVAL_MS },
     followUpsEnabled: env.WORKER_SCHEDULER_ENABLED && env.WORKER_FOLLOWUPS_ENABLED,
     lastDatabaseCheckAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
     lastJobPollAt: lastJobPollAt ? new Date(lastJobPollAt).toISOString() : null,
@@ -66,7 +66,7 @@ function scheduleTick() {
       env.WORKER_MORNING_BRIEFING_ENABLED ? scheduleMorningBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
       env.WORKER_CLOSING_BRIEFING_ENABLED ? scheduleClosingBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
       env.WORKER_FOLLOWUPS_ENABLED ? scheduleResearchFollowUps(getDatabase(), now) : Promise.resolve({ status: "disabled" as const }),
-      env.WORKER_PRICES_ENABLED ? schedulePriceCollection(getDatabase(), calendar, env.WORKER_PRICE_SYMBOLS, env.WORKER_PRICE_HISTORY_DAYS, now, env.WORKER_PRICE_BATCH_SIZE, env.WORKER_PRICE_REQUEST_INTERVAL_MS) : Promise.resolve({ enqueued: 0 }),
+      env.WORKER_PRICES_ENABLED ? schedulePriceCollection(getDatabase(), calendar, env.WORKER_PRICE_SYMBOLS, env.WORKER_PRICE_HISTORY_DAYS, now, env.WORKER_PRICE_BATCH_SIZE, env.WORKER_PRICE_REQUEST_INTERVAL_MS, env.WORKER_PRICE_SLOT_MS) : Promise.resolve({ enqueued: 0 }),
       env.WORKER_POSTOPEN_ENABLED ? schedulePostOpen(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
     ]);
   }).then(([result, briefing, closing, followUps, prices, postOpen]) => {

@@ -1,7 +1,7 @@
 # Native process deployment (no Docker)
 
-These are deployment templates, not an installed or validated deployment. The
-coding phase does not run builds, migrations, health checks, services, or backups.
+These are deployment templates, not an installed or validated deployment. Implementation checks may run static analysis, builds and isolated tests.
+Real migrations, deployments, provider checks and backups require the later operational phase.
 Use this procedure only during the later validation/deployment phase.
 
 ## Runtime layout
@@ -17,10 +17,13 @@ Use this procedure only during the later validation/deployment phase.
 Use a dedicated `swing` OS account. Keep release code owned by the administrator
 and readable by the service; make only runtime/cache/backup directories writable
 by `swing`. The templates bind web and worker health to loopback. For remote use,
-put the website behind an authenticated private ingress or VPN. The application
-currently has a single personal workspace and no browser sign-in; these templates
-do not provide public access or a multi-user security boundary. Keep worker
-health endpoints private as well.
+terminate HTTPS at your reverse proxy and forward the Authorization header. Set
+SWING_AUTH_USER, a random SWING_AUTH_PASSWORD (at least 24 characters),
+SWING_PUBLIC_ORIGIN to the exact HTTPS browser origin, and an independent
+WORKER_ACCESS_TOKEN (at least 32 characters) shared by web and worker. The app
+fails closed without these secrets. Keep worker health endpoints private too.
+This remains a single-owner workspace; HTTP Basic authentication is not a
+multi-user account system.
 
 ## Prepare a release later
 

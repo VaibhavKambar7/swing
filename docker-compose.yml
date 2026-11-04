@@ -24,6 +24,9 @@ services:
       context: .
       target: worker
     init: true
+    env_file: .env
+    volumes:
+      - ./config:/app/config:ro
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-swing}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-swing}
@@ -34,7 +37,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready',{headers:{Authorization:'Bearer '+process.env.WORKER_ACCESS_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 6s
       retries: 3
@@ -50,6 +53,10 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-swing}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-swing}
       WORKER_HEALTH_URL: http://worker:3001
+      SWING_AUTH_USER: ${SWING_AUTH_USER:?Set SWING_AUTH_USER}
+      SWING_AUTH_PASSWORD: ${SWING_AUTH_PASSWORD:?Set SWING_AUTH_PASSWORD}
+      WORKER_ACCESS_TOKEN: ${WORKER_ACCESS_TOKEN:?Set WORKER_ACCESS_TOKEN}
+      SWING_PUBLIC_ORIGIN: ${SWING_PUBLIC_ORIGIN:-http://localhost:3000}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -58,7 +65,7 @@ services:
       worker:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready',{headers:{Authorization:'Basic '+Buffer.from(process.env.SWING_AUTH_USER+':'+process.env.SWING_AUTH_PASSWORD).toString('base64')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 10s
       retries: 3

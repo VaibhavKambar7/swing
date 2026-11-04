@@ -62,7 +62,7 @@ export async function reassessMorningWatchlist(db: PrismaClient, calendar: Marke
   if (!Number.isFinite(at.getTime()) || at < window.dueAt) throw new BriefingError("BRIEFING_NOT_DUE");
   if (at >= window.endsAt) throw new BriefingError("REASSESSMENT_WINDOW_CLOSED");
   const sessionDate = new Date(`${date}T00:00:00Z`);
-  const morning = await db.dailyBriefing.findUnique({ where: { kind_sessionDate_reportVersion: { kind: "morning", sessionDate, reportVersion: MORNING_VERSION } } });
+  const morning = await db.dailyBriefing.findFirst({ where: { kind: "morning", sessionDate, reportVersion: { in: [MORNING_VERSION, "morning-v1"] } }, orderBy: [{ generatedAt: "desc" }, { id: "desc" }] });
   if (!morning) throw new BriefingError("MORNING_BRIEFING_REQUIRED");
   if (morning.generatedAt >= window.opensAt || morning.cutoffAt >= window.opensAt) throw new BriefingError("MORNING_REPORT_NOT_PREMARKET");
   const parsed = watchlistSchema.safeParse(morning.content);

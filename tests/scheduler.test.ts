@@ -57,7 +57,7 @@ describe("sequential announcement pipeline", () => {
     expect(actions.match.mock.invocationCallOrder[0]).toBeLessThan(actions.filter.mock.invocationCallOrder[0]);
     expect(actions.analyze).not.toHaveBeenCalled();
     await runAnnouncementPipeline(actions, { analyze: true, analysisLimit: 2 }, new AbortController().signal);
-    expect(actions.analyze).toHaveBeenCalledWith(2);
+    expect(actions.analyze).toHaveBeenCalledWith(2, expect.any(AbortSignal));
   });
   it.each(["fetch", "match", "filter"] as const)("halts downstream stages after %s fails", async (stage) => {
     const actions = stages();

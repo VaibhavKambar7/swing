@@ -59,7 +59,7 @@ afterAll(async () => {
   await engine?.close();
 });
 beforeEach(async () => {
-  await db.$executeRaw`TRUNCATE daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
+  await db.$executeRaw`TRUNCATE universe_imports, daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
     analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback,
     performance_outcomes CASCADE`;
 });
@@ -960,5 +960,138 @@ describe("performance outcome integrity", () => {
       alertId: notification.id, methodologyVersion: "v1", horizonTradingDays: 5,
       stockReturnPct: "5", benchmarkReturnPct: "2", excessReturnPct: "3",
     } }), "performance_outcomes_benchmark_fields");
+  });
+});
+
+describe("MVP workflow regression checks", () => {
+  it("atomically replaces membership, preserves removed research identities and rejects older imports", async () => {
+    const { importUniverse } = await import("../src/lib/instruments/universe");
+    const input = { source: "supplied official membership", effectiveDate: "2026-11-04", members: [{ symbol: "EXAMPLE", name: "Example" }, { symbol: "INDEX", name: "Index", kind: "index", yahooSymbol: "^NSEI" }] };
+    const first = await importUniverse(db, input);
+    expect(first.duplicate).toBe(false);
+    const original = await db.instrument.findUniqueOrThrow({ where: { exchange_symbol: { exchange: "NSE", symbol: "EXAMPLE" } } });
+    expect((await importUniverse(db, input)).duplicate).toBe(true);
+    await importUniverse(db, { ...input, effectiveDate: "2026-11-05", members: [{ symbol: "OTHER", name: "Other" }] });
+    expect((await db.instrument.findUniqueOrThrow({ where: { id: original.id } })).inUniverse).toBe(false);
+    await expect(importUniverse(db, { ...input, source: "older" })).rejects.toThrow("OLDER_MEMBERSHIP_REJECTED");
+  });
+  it("bounds each full-universe slot, rotates after restart, and does not grow work on repeated ticks", async () => {
+    const { schedulePriceCollection } = await import("../src/lib/market-data/scheduler");
+    await db.instrument.createMany({ data: Array.from({ length: 30 }, (_, i) => ({ exchange: "NSE", symbol: `STOCK${String(i).padStart(2, "0")}`, name: "Synthetic", active: true, inUniverse: true })) });
+    const calendar = parseCalendar({ source: "synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-11-30", holidays: [], specialSessions: [] });
+    const at = new Date("2026-11-04T04:00:00Z");
+    expect((await schedulePriceCollection(db, calendar, [], 7, at, 10)).enqueued).toBe(10);
+    expect((await schedulePriceCollection(db, calendar, [], 7, new Date(at.getTime() + 10000), 10)).enqueued).toBe(0);
+    expect((await schedulePriceCollection(db, calendar, [], 7, new Date(at.getTime() + 300000), 10)).enqueued).toBe(10);
+    const jobs = await db.job.findMany({ orderBy: { runAfter: "asc" } });
+    expect(new Set(jobs.map((j) => (j.payload as { symbol: string }).symbol)).size).toBe(20);
+  });
+  it("keeps successful source imports when another source fails and matches BSE codes without name guessing", async () => {
+    const { collectSource } = await import("../src/lib/announcements/sources");
+    await db.feedSource.upsert({ where: { id: "bse" }, create: { id: "bse", kind: "bse", name: "BSE", enabled: true }, update: { enabled: true } });
+    const s = await db.instrument.create({ data: { exchange: "NSE", symbol: "EXAMPLE", name: "Example", bseCode: "500001", inUniverse: true } });
+    const adapter = { fetch: async () => ({ items: [{ sourceId: "synthetic-bse", issuerCode: "500001", title: "Results", url: "https://example.com/evidence", description: null, publishedAt: null }], skipped: 0 }) };
+    expect((await collectSource(db, "bse", undefined, adapter)).inserted).toBe(1);
+    expect((await collectSource(db, "bse", undefined, adapter)).duplicates).toBe(1);
+    await matchStoredAnnouncements(db);
+    expect((await db.feedItem.findFirstOrThrow()).instrumentId).toBe(s.id);
+    await expect(collectSource(db, "bse", undefined, { fetch: async () => { throw new Error("secret"); } })).rejects.toThrow();
+    expect(await db.feedItem.count()).toBe(1);
+    expect((await db.pollingCheckpoint.findUniqueOrThrow({ where: { source_scope: { source: "feed-source", scope: "bse" } } })).lastErrorCode).toBe("SOURCE_COLLECTION_FAILED");
+  });
+  it("cancels pending work before claim and fences cancellation of already-running work", async () => {
+    const a = await enqueueJob(db, { kind: "database.check", dedupeKey: "cancel-pending" });
+    await db.job.update({ where: { id: a.id }, data: { cancelRequestedAt: new Date() } });
+    await recoverExpiredJobs(db);
+    expect(await claimJob(db, "test")).toBeNull();
+    expect((await db.job.findUniqueOrThrow({ where: { id: a.id } })).lastErrorCode).toBe("JOB_CANCELLED");
+    const b = await enqueueJob(db, { kind: "database.check", dedupeKey: "cancel-running" });
+    const running = (await claimJob(db, "test"))!;
+    await db.job.update({ where: { id: b.id }, data: { cancelRequestedAt: new Date() } });
+    expect(await finishJob(db, running)).toBe("failed");
+    expect((await db.job.findUniqueOrThrow({ where: { id: b.id } })).lastErrorCode).toBe("JOB_CANCELLED");
+  });
+});
+
+describe("review preferences feedback and follow-up regressions", () => {
+  it("retains version-specific review and feedback and rejects stale form updates", async () => {
+    const { setReadState } = await import("../src/lib/dashboard/read-state");
+    const { saveFeedback } = await import("../src/lib/dashboard/feedback");
+    const feed = await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "review", title: "Example", url: "https://example.com" } });
+    const input = { kind: "announcement", id: feed.id, version: "source" };
+    expect((await setReadState(db, { ...input, state: "read" })).ok).toBe(true);
+    expect((await saveFeedback(db, { ...input, choice: "useful", reason: "Helpful" })).ok).toBe(true);
+    const r = await db.feedResearch.create({ data: { feedItemId: feed.id, provider: "synthetic", model: "test", promptVersion: "test", inputHash: "test", inputSnapshot: {}, classification: "WATCH", summary: "test", significance: "test", risks: [], uncertainties: [], evidence: [] } });
+    expect((await setReadState(db, { ...input, state: "read" })).ok).toBe(false);
+    expect((await saveFeedback(db, { ...input, choice: "not-useful" })).ok).toBe(false);
+    expect((await setReadState(db, { ...input, version: r.id, state: "read" })).ok).toBe(true);
+    expect(await db.researchFeedback.count()).toBe(1);
+    expect((await getResearchDetail(db, "announcement", feed.id))?.isRead).toBe(true);
+  });
+  it("applies saved frontend preferences without deleting research or watchlist state", async () => {
+    const { changeWatchlist, savePreferences, defaultPreferences } = await import("../src/lib/dashboard/preferences");
+    const { getFrontendAlerts } = await import("../src/lib/dashboard/alerts");
+    const instrument = await db.instrument.create({ data: { exchange: "NSE", symbol: "EXAMPLE", name: "Example", active: true, inUniverse: true } });
+    const feed = await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "alert", matchStatus: "matched", matchCheckedAt: new Date(), title: "Example", url: "https://example.com", instrumentId: instrument.id } });
+    await db.feedResearch.create({ data: { feedItemId: feed.id, provider: "synthetic", model: "test", promptVersion: "test", inputHash: "test", inputSnapshot: {}, classification: "WATCH", summary: "test", significance: "test", risks: [], uncertainties: [], evidence: [] } });
+    expect((await getFrontendAlerts(db, { read: "all", page: 1 })).total).toBe(1);
+    await savePreferences(db, { ...defaultPreferences, watchlistOnly: true });
+    expect((await getFrontendAlerts(db, { read: "all", page: 1 })).total).toBe(0);
+    await changeWatchlist(db, { instrumentId: instrument.id, operation: "add" });
+    expect((await getFrontendAlerts(db, { read: "all", page: 1 })).total).toBe(1);
+    await changeWatchlist(db, { instrumentId: instrument.id, operation: "remove" });
+    expect(await db.feedResearch.count()).toBe(1);
+  });
+  it("counts later trading days across holidays and excludes late-imported reference quotes", async () => {
+    const { updateResearchFollowUps } = await import("../src/lib/research/followups");
+    const calendar = parseCalendar({ source: "synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-12-31", holidays: [{ date: "2026-11-05", name: "Synthetic closure" }], specialSessions: [] });
+    const s = await db.instrument.create({ data: { exchange: "NSE", symbol: "EXAMPLE", name: "Example", active: true, inUniverse: true } });
+    const published = new Date("2026-11-04T04:00:00Z");
+    const f = await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "outcome", matchStatus: "matched", matchCheckedAt: published, title: "Example", url: "https://example.com", instrumentId: s.id } });
+    await db.feedResearch.create({ data: { feedItemId: f.id, createdAt: published, provider: "synthetic", model: "test", promptVersion: "test", inputHash: "test", inputSnapshot: {}, classification: "WATCH", summary: "test", significance: "test", risks: [], uncertainties: [], evidence: [] } });
+    const snapshot = async (quoteTime: string, recordedAt: string, price: string, key: string) => db.marketSnapshotRecord.create({ data: { instrumentId: s.id, provider: "synthetic", providerSymbol: "EXAMPLE", contentHash: key, retrievedAt: new Date(quoteTime), recordedAt: new Date(recordedAt), requestedDays: 1, skippedBars: 0, quoteTime: new Date(quoteTime), quotePrice: price, quoteAgeSeconds: 0, quoteFreshness: "recent", quoteDelayStatus: "unknown" } });
+    await snapshot("2026-11-04T04:01:00Z", "2026-11-04T04:01:00Z", "100", "reference");
+    await updateResearchFollowUps(db, calendar, 25, new Date("2026-11-04T04:05:00Z"));
+    let row = await db.researchFollowUp.findFirstOrThrow({ where: { horizonSessions: 1 } });
+    expect(row.dueAt?.toISOString()).toBe("2026-11-06T10:05:00.000Z");
+    await snapshot("2026-11-06T09:59:00Z", "2026-11-06T09:59:01Z", "105", "later");
+    await updateResearchFollowUps(db, calendar, 25, new Date("2026-11-06T10:06:00Z"));
+    row = await db.researchFollowUp.findUniqueOrThrow({ where: { id: row.id } });
+    expect(row.status).toBe("measured"); expect(row.changePct?.toString()).toBe("5");
+    expect(row.comparison).toMatchObject({ corporateActions: "unverified", benchmark: { status: "unavailable" } });
+    // A second research version has no contemporaneous baseline; a later import cannot manufacture one.
+    await db.feedResearch.create({ data: { feedItemId: f.id, createdAt: new Date("2026-11-04T05:00:00Z"), provider: "synthetic", model: "test", promptVersion: "test", inputHash: "second", inputSnapshot: {}, classification: "WATCH", summary: "test", significance: "test", risks: [], uncertainties: [], evidence: [] } });
+    await snapshot("2026-11-04T05:01:00Z", "2026-11-06T09:00:00Z", "101", "late-import");
+    await updateResearchFollowUps(db, calendar, 25, new Date("2026-11-06T10:06:00Z"));
+    expect(await db.researchFollowUp.count({ where: { reason: "REFERENCE_WINDOW_MISSING" } })).toBe(3);
+  });
+  it("does not requeue cancelled failed work without a deliberate audited retry", async () => {
+    const { retryFailedJob } = await import("../src/lib/jobs/retry");
+    const job = await enqueueJob(db, { kind: "database.check", dedupeKey: "manual-retry" });
+    const at = new Date();
+    await db.job.update({ where: { id: job.id }, data: { cancelRequestedAt: at } });
+    await recoverExpiredJobs(db);
+    const failed = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect((await retryFailedJob(db, { id: job.id, confirmed: true, finishedAt: failed.completedAt!.toISOString(), reason: "Explicit retry" })).ok).toBe(true);
+    const result = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(result.status).toBe("pending"); expect(result.cancelRequestedAt).toBeNull();
+    expect(await db.jobRetryRequest.count()).toBe(1);
+  });
+});
+
+describe("aligned comparison evidence", () => {
+  it("excludes future-known index revisions and freezes relative changes with quote provenance", async () => {
+    const { buildMarketContext } = await import("../src/lib/market-data/context");
+    const index = await db.instrument.create({ data: { exchange: "NSE", symbol: "INDEX", name: "Synthetic index", kind: "index", inUniverse: true } });
+    const equity = await db.instrument.create({ data: { exchange: "NSE", symbol: "EXAMPLE", name: "Synthetic stock", inUniverse: true, benchmarkId: index.id } });
+    const quote = async (time: string, knownAt: string, price: string, hash: string) => db.marketSnapshotRecord.create({ data: { instrumentId: index.id, provider: "synthetic", providerSymbol: "INDEX", retrievedAt: new Date(time), recordedAt: new Date(knownAt), quoteTime: new Date(time), quotePrice: price, quoteFreshness: "recent", quoteAgeSeconds: 0, quoteDelayStatus: "unknown", contentHash: hash, skippedBars: 0, requestedDays: 1 } });
+    const reference = await quote("2026-11-04T03:59:30Z", "2026-11-04T03:59:31Z", "100", "baseline");
+    const observed = await quote("2026-11-04T04:04:30Z", "2026-11-04T04:04:31Z", "101", "observed");
+    await quote("2026-11-04T04:05:00Z", "2026-11-04T04:10:00Z", "120", "future-known");
+    const calendar = parseCalendar({ source: "synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-11-30", holidays: [], specialSessions: [] });
+    const context = await buildMarketContext(db, calendar, equity, "synthetic", new Date("2026-11-04T04:00:00Z"), new Date("2026-11-04T04:05:00Z"), "2", new Date("2026-11-04T04:05:01Z"));
+    expect(context.benchmark).toMatchObject({ changePct: "1.00000000", excessChangePercentagePoints: "1.00000000", snapshotIds: [reference.id, observed.id] });
+    expect(context.sector.status).toBe("unavailable");
+    expect(context.usualVolatility.status).toBe("unavailable");
   });
 });

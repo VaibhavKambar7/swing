@@ -1,9 +1,11 @@
+import { supportedFeedWhere } from "../announcements/coverage";
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { RELEVANCE_RULE_VERSION } from "../announcements/filter";
 import { RESEARCH_PROMPT_VERSION, ResearchError, researchSchema, type ResearchInput, type ResearchProvider } from "./schema";
 
 const eligible = {
+  AND: [supportedFeedWhere],
   matchStatus: "matched" as const,
   relevanceStatus: { in: ["keep" as const, "review" as const] },
   relevanceRuleVersion: RELEVANCE_RULE_VERSION,
@@ -35,14 +37,15 @@ function inputHash(input: ResearchInput) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
-export async function analyzeStoredAnnouncements(db: PrismaClient, provider: ResearchProvider, limit = 5) {
+export async function analyzeStoredAnnouncements(db: PrismaClient, provider: ResearchProvider, limit = 5, signal?: AbortSignal, feedItemId?: string) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new ResearchError("invalid_limit");
   const counts = { analyzed: 0, skipped: 0, failed: 0, attempted: 0 };
   const failures: { feedItemId: string; code: string; httpStatus?: number }[] = [];
   let cursor: string | undefined;
   while (counts.attempted < limit) {
+    signal?.throwIfAborted();
     const items = await db.feedItem.findMany({
-      where: { ...eligible, ...(cursor ? { id: { gt: cursor } } : {}) },
+      where: { ...eligible, ...(feedItemId ? { id: feedItemId } : {}), ...(cursor ? { id: { gt: cursor, ...(feedItemId ? { equals: feedItemId } : {}) } } : {}) },
       include: { instrument: true }, orderBy: { id: "asc" }, take: 50,
     });
     if (!items.length) break;
@@ -58,7 +61,8 @@ export async function analyzeStoredAnnouncements(db: PrismaClient, provider: Res
       }
       counts.attempted++;
       try {
-        const result = await provider.analyze(input);
+        const result = await provider.analyze(input, signal);
+        signal?.throwIfAborted();
         const parsed = researchSchema.safeParse(result.assessment);
         if (!parsed.success) throw new ResearchError("invalid_research_output");
         const assessment = parsed.data;
@@ -80,6 +84,7 @@ export async function analyzeStoredAnnouncements(db: PrismaClient, provider: Res
         if (inserted) counts.analyzed++;
         else counts.skipped++;
       } catch (error) {
+        signal?.throwIfAborted();
         counts.failed++;
         failures.push({ feedItemId: item.id, code: error instanceof ResearchError ? error.code : "research_storage_failed", httpStatus: error instanceof ResearchError ? error.httpStatus : undefined });
       }

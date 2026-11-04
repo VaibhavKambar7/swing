@@ -1,3 +1,4 @@
+import { supportedFeedWhere } from "./coverage";
 import type { PrismaClient } from "../../generated/prisma/client";
 
 export const RELEVANCE_RULE_VERSION = "announcement-noise-v1";
@@ -58,6 +59,7 @@ export function classifyAnnouncementRelevance(input: { title: string; descriptio
 export async function filterStoredAnnouncements(db: PrismaClient, now: () => Date = () => new Date()) {
   const counts = { keep: 0, routine: 0, review: 0 };
   const eligible = {
+    AND: [supportedFeedWhere],
     matchStatus: "matched" as const,
     instrument: { exchange: "NSE", kind: "equity" as const, active: true, inUniverse: true },
     OR: [
@@ -70,11 +72,11 @@ export async function filterStoredAnnouncements(db: PrismaClient, now: () => Dat
     const items = await db.feedItem.findMany({
       where: { ...eligible, ...(cursor ? { id: { gt: cursor } } : {}) },
       orderBy: { id: "asc" }, take: 100,
-      select: { id: true, title: true, description: true },
+      select: { id: true, title: true, description: true, source: true },
     });
     if (!items.length) break;
     for (const item of items) {
-      const decision = classifyAnnouncementRelevance(item);
+      const decision = item.source.startsWith("news-search:") ? { status: "review" as const, reason: "UNVERIFIED_EXTERNAL_NEWS" } : classifyAnnouncementRelevance(item);
       const result = await db.feedItem.updateMany({
         // Repeat eligibility in the write: overlapping commands must not overwrite
         // a decision already produced by the current rules or an invalidated match.

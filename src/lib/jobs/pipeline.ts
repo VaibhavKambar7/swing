@@ -8,19 +8,19 @@ import { createGeminiProvider } from "../research/gemini";
 import { ResearchError } from "../research/schema";
 import { JobError } from "./queue";
 
-export function createPipelineStages(db: PrismaClient) {
+export function createPipelineStages(db: PrismaClient): PipelineStages {
   return {
-    fetch: async () => collectEnabledSources(db),
+    fetch: async (signal?: AbortSignal) => collectEnabledSources(db, signal),
     match: () => matchStoredAnnouncements(db),
     filter: () => filterStoredAnnouncements(db),
-    analyze: (limit: number) => analyzeStoredAnnouncements(db, createGeminiProvider(), limit),
+    analyze: (limit: number, signal?: AbortSignal) => analyzeStoredAnnouncements(db, createGeminiProvider(), limit, signal),
   };
 }
 export type PipelineStages = {
- fetch: () => Promise<{ received: number; inserted: number; duplicates: number; failed?: number }>;
- match: ReturnType<typeof createPipelineStages>["match"];
- filter: ReturnType<typeof createPipelineStages>["filter"];
- analyze: ReturnType<typeof createPipelineStages>["analyze"];
+ fetch: (signal?: AbortSignal) => Promise<{ received: number; inserted: number; duplicates: number; failed?: number }>;
+ match: () => Promise<unknown>;
+ filter: () => Promise<unknown>;
+ analyze: (limit: number, signal?: AbortSignal) => Promise<{ failed: number }>;
 };
 
 export async function runAnnouncementPipeline(
@@ -29,14 +29,14 @@ export async function runAnnouncementPipeline(
   let stage = "fetch";
   try {
     signal.throwIfAborted();
-    const fetched = await stages.fetch();
+    const fetched = await stages.fetch(signal);
     stage = "match"; signal.throwIfAborted();
     await stages.match();
     stage = "filter"; signal.throwIfAborted();
     await stages.filter();
     if (options.analyze) {
       stage = "analyze"; signal.throwIfAborted();
-      const result = await stages.analyze(options.analysisLimit);
+      const result = await stages.analyze(options.analysisLimit, signal);
       if (result.failed) throw new JobError("PIPELINE_ANALYZE_FAILED");
     }
     if ("failed" in fetched && fetched.failed) throw new JobError("PIPELINE_SOURCE_COLLECTION_FAILED");

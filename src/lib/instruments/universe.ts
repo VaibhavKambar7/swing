@@ -35,10 +35,10 @@ export async function importUniverse(db: PrismaClient, input: unknown) {
     if (await tx.universeImport.findUnique({ where: { contentHash: hash } })) return { duplicate: true, count: data.members.length };
     const latest = await tx.universeImport.findFirst({ orderBy: { effectiveDate: "desc" } });
     if (latest && latest.effectiveDate > new Date(data.effectiveDate)) throw new Error("OLDER_MEMBERSHIP_REJECTED");
-    await tx.instrument.updateMany({ where: { exchange: "NSE", inUniverse: true }, data: { inUniverse: false } });
+    await tx.instrument.updateMany({ where: { exchange: "NSE", inUniverse: true }, data: { inUniverse: false, updatedAt: new Date() } });
     for (const m of data.members) {
-      const { benchmark: _benchmark, sectorIndex: _sectorIndex, ...fields } = m;
-      await tx.instrument.upsert({ where: { exchange_symbol: { exchange: "NSE", symbol: m.symbol } }, create: { ...fields, exchange: "NSE", inUniverse: true, refreshedAt: new Date() }, update: { ...fields, inUniverse: true, active: true, refreshedAt: new Date() } });
+      const fields = { symbol: m.symbol, name: m.name, kind: m.kind, sector: m.sector, isin: m.isin, yahooSymbol: m.yahooSymbol, bseCode: m.bseCode };
+      await tx.instrument.upsert({ where: { exchange_symbol: { exchange: "NSE", symbol: m.symbol } }, create: { ...fields, exchange: "NSE", inUniverse: true, refreshedAt: new Date() }, update: { ...fields, inUniverse: true, active: true, refreshedAt: new Date(), updatedAt: new Date() } });
     }
     const members = await tx.instrument.findMany({ where: { exchange: "NSE", inUniverse: true }, select: { id: true, symbol: true } });
     for (const m of data.members) await tx.instrument.update({ where: { exchange_symbol: { exchange: "NSE", symbol: m.symbol } }, data: { benchmarkId: members.find((x) => x.symbol === m.benchmark)?.id ?? null, sectorIndexId: members.find((x) => x.symbol === m.sectorIndex)?.id ?? null } });

@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { getJobStatus } from "../jobs/status";
-import { WORKSPACE_OWNER, reviewState } from "./read-state";
+import { WORKSPACE_OWNER, reviewState, getCurrentVersion } from "./read-state";
 import { feedbackForVersion } from "./feedback";
 
 export const inboxFiltersSchema = z.object({
@@ -75,10 +75,10 @@ export async function getOverview(db: PrismaClient) {
   return { stocks, announcements, movements, pending, lastFiling, lastQuote, queue, briefings };
 }
 export function getStocks(db: PrismaClient) {
-  return db.instrument.findMany({ where: { kind: "equity" }, orderBy: { symbol: "asc" }, take: 500, select: { symbol: true } });
+  return db.instrument.findMany({ where: { kind: "equity" }, orderBy: { symbol: "asc" }, take: 2000, select: { symbol: true } });
 }
-export async function getBriefings(db: PrismaClient, take = 25) {
-  const reports = await db.dailyBriefing.findMany({ take, orderBy: [{ cutoffAt: "desc" }, { id: "desc" }], select: {
+export async function getBriefings(db: PrismaClient, take = 25, page = 1) {
+  const reports = await db.dailyBriefing.findMany({ take, skip: (page - 1) * take, orderBy: [{ cutoffAt: "desc" }, { id: "desc" }], select: {
     id: true, kind: true, sessionDate: true, reportVersion: true, cutoffAt: true, generatedAt: true,
     _count: { select: { postOpenAssessments: true } },
     readStates: { where: { ownerKey: WORKSPACE_OWNER }, select: { contentVersion: true, readAt: true } },
@@ -103,14 +103,15 @@ export function safeSourceUrl(value: unknown): string | null {
   const url = URL.parse(value);
   return url && ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
 }
-export async function getResearchDetail(db: PrismaClient, kind: string, id: string) {
+export async function getResearchDetail(db: PrismaClient, kind: string, id: string, page = 1) {
   if (!["announcement", "movement"].includes(kind) || !z.string().uuid().safeParse(id).success) return null;
   if (kind === "announcement") {
-    const item = await db.feedItem.findUnique({ where: { id }, include: { researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, research: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 } } });
+    const item = await db.feedItem.findUnique({ where: { id }, include: { researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, research: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5, skip: (page - 1) * 5 } } });
     if (!item) return null;
+    const currentVersion = await getCurrentVersion(db, "announcement", id) ?? "source";
     return {
-      ...reviewState(item.readStates, item.research[0]?.id ?? "source"),
-      feedback: feedbackForVersion(item.researchFeedback, item.research[0]?.id ?? "source"),
+      ...reviewState(item.readStates, currentVersion),
+      feedback: feedbackForVersion(item.researchFeedback, currentVersion),
       id, kind: "announcement" as const, title: item.title, symbol: item.instrument?.symbol ?? "Unmatched issuer", sourceText: item.description,
       marketContext: null,
       facts: { "Published": item.publishedAt, "Discovered": item.discoveredAt, "Match checked": item.matchCheckedAt, "Filter checked": item.relevanceCheckedAt },
@@ -120,13 +121,14 @@ export async function getResearchDetail(db: PrismaClient, kind: string, id: stri
     };
   }
   const item = await db.signal.findFirst({ where: { id, origin: "movement" }, include: {
-    researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, analyses: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5 },
+    researchFeedback: { where: { ownerKey: WORKSPACE_OWNER } }, readStates: { where: { ownerKey: WORKSPACE_OWNER } }, instrument: true, analyses: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5, skip: (page - 1) * 5 },
     signalEvidence: { orderBy: { retrievedAt: "desc" }, take: 20 },
   } });
   if (!item) return null;
+  const currentVersion = await getCurrentVersion(db, "movement", id) ?? "source";
   return {
-    ...reviewState(item.readStates, item.analyses[0]?.id ?? "source"),
-    feedback: feedbackForVersion(item.researchFeedback, item.analyses[0]?.id ?? "source"),
+    ...reviewState(item.readStates, currentVersion),
+    feedback: feedbackForVersion(item.researchFeedback, currentVersion),
     id, kind: "movement" as const, title: `${item.instrument.symbol} · observed price movement`, symbol: item.instrument.symbol, sourceText: null,
     marketContext: item.context && typeof item.context === "object" && !Array.isArray(item.context) ? item.context.marketContext : null,
     facts: { "Observed": item.observedAt, "Reference time": item.windowStart, "Stored": item.createdAt },
@@ -134,7 +136,7 @@ export async function getResearchDetail(db: PrismaClient, kind: string, id: stri
     evidence: item.signalEvidence.map((e) => ({ title: e.title, url: safeSourceUrl(e.url) })),
     research: item.analyses.map((r) => {
       const assessment = object(r.assessment);
-      return { ...r, classification: typeof assessment.classification === "string" && ["INVESTIGATE", "WATCH", "IGNORE"].includes(assessment.classification) ? assessment.classification : "PENDING", significance: typeof assessment.significance === "string" ? assessment.significance : null, risks: stringList(r.risks), uncertainties: stringList(r.uncertainties) };
+      return { ...r, evidence: assessment.evidence ?? [], classification: typeof assessment.classification === "string" && ["INVESTIGATE", "WATCH", "IGNORE"].includes(assessment.classification) ? assessment.classification : "PENDING", significance: typeof assessment.significance === "string" ? assessment.significance : null, risks: stringList(r.risks), uncertainties: stringList(r.uncertainties) };
     }),
   };
 }

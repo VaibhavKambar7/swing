@@ -7,7 +7,7 @@ import { WatchlistForm } from "@/components/dashboard/preferences-forms";
 export default async function Watchlist() {
   const loaded = await loadRead(async () => {
     const db = getDatabase();
-    const [entries, stocks] = await Promise.all([getWatchlist(db), db.instrument.findMany({ where: { active: true, inUniverse: true, kind: "equity" }, orderBy: [{ symbol: "asc" }, { id: "asc" }], take: 1000, select: { id: true, symbol: true, exchange: true } })]);
+    const [entries, stocks] = await Promise.all([getWatchlist(db), db.instrument.findMany({ where: { active: true, inUniverse: true, kind: "equity" }, orderBy: [{ symbol: "asc" }, { id: "asc" }], take: 2000, select: { id: true, symbol: true, exchange: true } })]);
     return { entries, stocks };
   });
   return <><Header title="Your watchlist" description="Choose the stocks you want to follow more closely." />

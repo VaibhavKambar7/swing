@@ -1,9 +1,11 @@
 "use server";
+import { requireAccess } from "@/lib/auth/require-access";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getDatabase } from "@/lib/db";
 import { importUniverse, parseConstituentCsv } from "@/lib/instruments/universe";
 export async function saveUniverse(form: FormData) {
+  await requireAccess();
   let status = "failed";
   try {
     const text = String(form.get("content") ?? "");

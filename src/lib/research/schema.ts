@@ -36,7 +36,7 @@ export type MovementResearchInput = {
 export type ResearchProvider = {
   name: string;
   model: string;
-  analyze(input: ResearchInput | MovementResearchInput): Promise<ResearchResult>;
+  analyze(input: ResearchInput | MovementResearchInput, signal?: AbortSignal): Promise<ResearchResult>;
 };
 
 export class ResearchError extends Error {

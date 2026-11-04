@@ -1,3 +1,4 @@
+import { rateLimitedFetch } from "../network/rate-limit";
 import { z } from "zod";
 import type { PrismaClient, FeedSource } from "../../generated/prisma/client";
 import { AnnouncementFeedError, fetchAnnouncements, NSE_SOURCE, type FeedEntry } from "./rss";
@@ -47,7 +48,7 @@ export function createSourceAdapter(fetcher: typeof fetch = fetch, clock = () =>
   } };
 }
 export function sourceNamespace(source: FeedSource) { return source.kind === "nse" ? NSE_SOURCE : source.kind === "bse" ? "bse-announcements" : `news-search:${source.id}`; }
-export async function collectSource(db: PrismaClient, id: string, signal?: AbortSignal, adapter = createSourceAdapter()) {
+export async function collectSource(db: PrismaClient, id: string, signal?: AbortSignal, adapter = createSourceAdapter(rateLimitedFetch(db))) {
   const source = await db.feedSource.findUnique({ where: { id } });
   if (!source?.enabled) throw new AnnouncementFeedError("source_disabled", "Source is missing or disabled");
   const key = { source: "feed-source", scope: id };
@@ -62,9 +63,9 @@ export async function collectSource(db: PrismaClient, id: string, signal?: Abort
     throw error;
   }
 }
-export async function collectEnabledSources(db: PrismaClient) {
+export async function collectEnabledSources(db: PrismaClient, signal?: AbortSignal) {
   const sources = await db.feedSource.findMany({ where: { enabled: true }, orderBy: { id: "asc" } });
   let received = 0, inserted = 0, duplicates = 0, failed = 0;
-  for (const source of sources) { try { const result = await collectSource(db, source.id); received += result.received; inserted += result.inserted; duplicates += result.duplicates; } catch { failed++; } }
+  for (const source of sources) { signal?.throwIfAborted(); try { const result = await collectSource(db, source.id, signal); received += result.received; inserted += result.inserted; duplicates += result.duplicates; } catch { failed++; } }
   return { received, inserted, duplicates, failed };
 }

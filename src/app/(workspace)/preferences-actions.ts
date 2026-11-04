@@ -1,9 +1,11 @@
 "use server";
+import { requireAccess } from "@/lib/auth/require-access";
 import { revalidatePath } from "next/cache";
 import { getDatabase } from "@/lib/db";
 import { changeWatchlist, savePreferences } from "@/lib/dashboard/preferences";
 import type { ReadActionState } from "@/lib/dashboard/read-state";
 export async function updatePreferences(_previous: ReadActionState, form: FormData): Promise<ReadActionState> {
+  await requireAccess();
   try {
     const result = await savePreferences(getDatabase(), {
       announcementsEnabled: form.get("announcementsEnabled") === "on", movementsEnabled: form.get("movementsEnabled") === "on",
@@ -16,6 +18,7 @@ export async function updatePreferences(_previous: ReadActionState, form: FormDa
   } catch { return { ok: false, message: "Could not save preferences. Check the database connection and try again." }; }
 }
 export async function updateWatchlist(_previous: ReadActionState, form: FormData): Promise<ReadActionState> {
+  await requireAccess();
   try {
     const result = await changeWatchlist(getDatabase(), { instrumentId: form.get("instrumentId"), operation: form.get("operation") });
     if (result.ok) revalidatePath("/", "layout");

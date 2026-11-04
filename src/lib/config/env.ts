@@ -25,12 +25,11 @@ const envSchema = z.object({
   WORKER_PRICES_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_PRICE_SYMBOLS: z.string().default("").transform((value) => value.split(",").map((v) => v.trim().toUpperCase()).filter(Boolean))
     .pipe(z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(2000)).transform((value) => [...new Set(value)]),
+  WORKER_PRICE_SLOT_MS: z.coerce.number().int().min(30000).max(300000).multipleOf(30000).default(300000),
   WORKER_PRICE_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   WORKER_PRICE_REQUEST_INTERVAL_MS: z.coerce.number().int().min(250).max(60000).default(1000),
   WORKER_PRICE_HISTORY_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   WORKER_POSTOPEN_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
-}).superRefine((value, context) => {
-  if (false) context.addIssue({ code: "custom", path: ["WORKER_PRICE_SYMBOLS"], message: "Select at least one price symbol" });
 });
 
 export type Env = z.infer<typeof envSchema>;

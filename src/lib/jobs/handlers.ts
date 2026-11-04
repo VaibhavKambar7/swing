@@ -1,8 +1,7 @@
 import { collectSource } from "../announcements/sources";
 import { z } from "zod";
 import type { PrismaClient } from "../../generated/prisma/client";
-import { fetchAnnouncements, AnnouncementFeedError } from "../announcements/rss";
-import { storeAnnouncements } from "../announcements/ingest";
+import { AnnouncementFeedError } from "../announcements/rss";
 import { matchStoredAnnouncements } from "../announcements/match";
 import { filterStoredAnnouncements } from "../announcements/filter";
 import { analyzeStoredAnnouncements } from "../research/analyze";
@@ -25,17 +24,18 @@ import { MarketDataError } from "../market-data/provider";
 
 import { followUpPayload, updateResearchFollowUps } from "../research/followups";
 
-export const JOB_KINDS = ["sources.collect", "research.followups", "prices.collect", "database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
+export const JOB_KINDS = ["announcements.research-item", "sources.collect", "research.followups", "prices.collect", "database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
+const itemResearchPayload = z.object({ feedItemId: z.string().uuid() }).strict();
 const sourcePayload = z.object({ sourceId: z.string().min(1).max(100) }).strict();
 const emptyPayload = z.object({}).strict();
 const analysisPayload = z.object({ limit: z.number().int().min(1).max(20).default(1) }).strict();
 const pipelinePayload = z.object({ analyze: z.boolean().default(false), analysisLimit: z.number().int().min(1).max(20).default(1) }).strict();
 const movementPayload = z.object({ signalId: z.string().uuid(), analyze: z.boolean().default(false) }).strict();
-const briefingPayload = z.object({ sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict();
+const briefingPayload = z.object({ sessionDate: z.string().date() }).strict();
 
 export function validateJobPayload(kind: string, payload: unknown) {
   if (!(JOB_KINDS as readonly string[]).includes(kind)) throw new JobError("UNSUPPORTED_JOB_KIND", true);
-  const result = (kind === "sources.collect" ? sourcePayload : kind === "research.followups" ? followUpPayload : kind === "prices.collect" ? priceJobSchema : ["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
+  const result = (kind === "announcements.research-item" ? itemResearchPayload : kind === "sources.collect" ? sourcePayload : kind === "research.followups" ? followUpPayload : kind === "prices.collect" ? priceJobSchema : ["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
   if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
   return result.data;
 }
@@ -53,11 +53,11 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     }
     signal.throwIfAborted();
   };
-  const wrap = (kind: string, action: (payload: { limit?: number }) => Promise<unknown>): JobHandler => async (job, signal) => {
+  const wrap = (kind: string, action: (payload: { limit?: number }, signal: AbortSignal) => Promise<unknown>): JobHandler => async (job, signal) => {
     const payload = validateJobPayload(kind, job.payload);
     signal.throwIfAborted();
     try {
-      await action("limit" in payload ? { limit: payload.limit } : {});
+      await action("limit" in payload ? { limit: payload.limit } : {}, signal);
     } catch (error) {
       if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
       if (error instanceof AnnouncementFeedError && error.code === "invalid_url") throw new JobError("FEED_CONFIGURATION_REQUIRED", true);
@@ -66,6 +66,12 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     signal.throwIfAborted();
   };
   return {
+    "announcements.research-item": async (job, signal) => {
+      const { feedItemId } = itemResearchPayload.parse(job.payload);
+      const result = await analyzeStoredAnnouncements(db, createGeminiProvider(), 1, signal, feedItemId);
+      if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
+      if (!result.analyzed && !result.skipped) throw new JobError("RESEARCH_ITEM_NOT_ELIGIBLE", true);
+    },
     "sources.collect": async (job, signal) => {
       const payload = sourcePayload.parse(job.payload);
       await collectSource(db, payload.sourceId, signal);
@@ -84,7 +90,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       const payload = priceJobSchema.safeParse(job.payload);
       if (!payload.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
       signal.throwIfAborted();
-      try { await collectPrice(db, createMarketProvider(), await loadMarketCalendar(), payload.data, signal); }
+      try { await collectPrice(db, createMarketProvider(undefined, db), await loadMarketCalendar(), payload.data, signal); }
       catch (error) {
         if (error instanceof CalendarError) throw new JobError(error.code, true);
         if (error instanceof MarketDataError) {
@@ -102,7 +108,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
       signal.throwIfAborted();
       try {
-        await researchMovement(db, result.data.signalId, result.data.analyze ? createGeminiProvider() : undefined);
+        await researchMovement(db, result.data.signalId, result.data.analyze ? createGeminiProvider() : undefined, new Date(), signal);
       } catch (error) {
         if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
         if (error instanceof ResearchError && ["movement_unavailable", "movement_sources_missing", "movement_sources_mismatch", "invalid_movement_request"].includes(error.code)) throw new JobError("MOVEMENT_CONTEXT_UNAVAILABLE", true);
@@ -117,14 +123,13 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       await runAnnouncementPipeline(stages, result.data, signal);
     },
     "database.check": wrap("database.check", () => db.$queryRaw`SELECT 1`),
-    "announcements.fetch": wrap("announcements.fetch", async () => {
-      const feed = await fetchAnnouncements();
-      await storeAnnouncements(db, feed.items);
+    "announcements.fetch": wrap("announcements.fetch", async (_payload, signal) => {
+      await collectSource(db, "nse", signal);
     }),
     "announcements.match": wrap("announcements.match", () => matchStoredAnnouncements(db)),
     "announcements.filter": wrap("announcements.filter", () => filterStoredAnnouncements(db)),
-    "announcements.analyze": wrap("announcements.analyze", async (payload) => {
-      const result = await analyzeStoredAnnouncements(db, createGeminiProvider(), payload.limit);
+    "announcements.analyze": wrap("announcements.analyze", async (payload, signal) => {
+      const result = await analyzeStoredAnnouncements(db, createGeminiProvider(), payload.limit, signal);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
     }),
   };

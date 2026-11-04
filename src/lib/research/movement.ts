@@ -1,3 +1,4 @@
+import { supportedFeedWhere } from "../announcements/coverage";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { PrismaClient } from "../../generated/prisma/client";
@@ -24,7 +25,7 @@ async function movementInput(db: PrismaClient, signalId: string, at: Date) {
       !current.quotePrice.eq(signal.price) || !reference.quotePrice.eq(signal.referencePrice) || current.quoteTime.getTime() !== signal.observedAt.getTime() || reference.quoteTime.getTime() !== signal.windowStart.getTime()) throw new ResearchError("movement_sources_mismatch");
   const upper = new Date(Math.min(at.getTime(), signal.observedAt.getTime() + 30 * 60000));
   const filings = await db.feedItem.findMany({ where: {
-    instrumentId: signal.instrumentId, matchStatus: "matched",
+    AND: [supportedFeedWhere], instrumentId: signal.instrumentId, matchStatus: "matched",
     relevanceStatus: { in: ["keep", "review"] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
     publishedAt: { gte: new Date(signal.observedAt.getTime() - 86400000), lte: upper }, discoveredAt: { lte: at },
   }, orderBy: [{ publishedAt: "desc" }, { id: "asc" }], take: 30 });
@@ -57,7 +58,8 @@ function fingerprint(input: MovementResearchInput) {
   return createHash("sha256").update(JSON.stringify({ ...rest, movement: event })).digest("hex");
 }
 
-export async function researchMovement(db: PrismaClient, signalId: string, provider?: ResearchProvider, at = new Date()) {
+export async function researchMovement(db: PrismaClient, signalId: string, provider?: ResearchProvider, at = new Date(), abort?: AbortSignal) {
+  abort?.throwIfAborted();
   const { input, selected } = await movementInput(db, signalId, at);
   const linked = selected.length ? await db.signalEvidence.createMany({ data: selected.map((entry) => ({
     signalId, kind: entry.source.startsWith("news-search:") ? "news" : "official_announcement", url: entry.url, title: entry.title, publisher: entry.source,
@@ -69,7 +71,8 @@ export async function researchMovement(db: PrismaClient, signalId: string, provi
   const identity = { signalId, provider: provider.name, model: provider.model, promptVersion: MOVEMENT_RESEARCH_VERSION, inputHash: hash };
   const prior = await db.analysis.findFirst({ where: identity, select: { id: true } });
   if (prior) return { status: "duplicate", signalId, analysisId: prior.id, evidenceCount: selected.length, catalystVerified: false };
-  const result = await provider.analyze(input);
+  const result = await provider.analyze(input, abort);
+  abort?.throwIfAborted();
   const checked = researchSchemaFor(input.evidence.map((entry) => entry.id), "movement").safeParse(result.assessment);
   if (!checked.success) throw new ResearchError("invalid_movement_research");
   const assessment = checked.data;

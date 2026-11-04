@@ -1,3 +1,4 @@
+import { supportedFeedWhere } from "../announcements/coverage";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { CalendarError, getMarketDay, getMarketState, marketDate, type MarketCalendar } from "../market/calendar";
 import { BriefingError } from "./morning";
@@ -6,7 +7,7 @@ import { RESEARCH_PROMPT_VERSION } from "../research/schema";
 import { MOVEMENT_RESEARCH_VERSION } from "../research/movement";
 import { MOVEMENT_VERSION } from "../market-data/detect";
 
-export const CLOSING_VERSION = "closing-v1";
+export const CLOSING_VERSION = "closing-v2";
 
 export function closingWindow(calendar: MarketCalendar, date: string) {
   const day = getMarketDay(calendar, date);
@@ -58,12 +59,12 @@ export async function generateClosingBriefing(db: PrismaClient, calendar: Market
     const prior = await tx.dailyBriefing.findUnique({ where: { kind_sessionDate_reportVersion: identity } });
     if (prior) return { status: "existing", report: prior };
     const universe = { active: true, inUniverse: true, exchange: "NSE", kind: "equity" as const };
-    const filingWhere = { matchStatus: "matched" as const, instrument: universe,
+    const filingWhere = { AND: [supportedFeedWhere], matchStatus: "matched" as const, instrument: universe,
       matchCheckedAt: { lte: window.cutoffAt }, relevanceCheckedAt: { lte: window.cutoffAt },
       relevanceStatus: { in: ["keep" as const, "review" as const] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
       discoveredAt: { lte: window.cutoffAt }, publishedAt: { gte: window.windowStart, lte: window.cutoffAt } };
     const [stocks, universeCount, filings, filingCount, signals, signalCount] = await Promise.all([
-      tx.instrument.findMany({ where: universe, orderBy: { symbol: "asc" }, take: 100, select: { symbol: true, marketSnapshots: {
+      tx.instrument.findMany({ where: universe, orderBy: { symbol: "asc" }, take: 2000, select: { symbol: true, marketSnapshots: {
         where: { provider: "yahoo-experimental", retrievedAt: { lte: window.cutoffAt }, recordedAt: { lte: window.cutoffAt } },
         orderBy: [{ retrievedAt: "desc" }, { recordedAt: "desc" }, { id: "desc" }], take: 1,
         include: { candles: { where: { sessionDate: identity.sessionDate }, take: 1 } },
@@ -98,18 +99,18 @@ export async function generateClosingBriefing(db: PrismaClient, calendar: Market
       methodology: "recorded 5–6 minute trigger, not a daily return",
       research: entry.analyses[0] ? { analysisId: entry.analyses[0].id, summary: entry.analyses[0].summary, risks: entry.analyses[0].risks, uncertainties: entry.analyses[0].uncertainties, catalystVerified: false } : null,
     }));
-    const notices = filings.filter((entry) => url(entry.url)).map((entry) => ({ feedItemId: entry.id, symbol: entry.instrument!.symbol, title: entry.title.slice(0, 1000), url: url(entry.url)!, publishedAt: entry.publishedAt!.toISOString(),
+    const notices = filings.filter((entry) => url(entry.url)).map((entry) => ({ feedItemId: entry.id, symbol: entry.instrument!.symbol, source: entry.source, title: entry.title.slice(0, 1000), url: url(entry.url)!, publishedAt: entry.publishedAt!.toISOString(),
       classification: entry.research[0]?.classification ?? null, summary: entry.research[0]?.summary ?? null }));
     const content = {
       sessionDate: date, cutoffAt: window.cutoffAt.toISOString(), sessionOpen: window.sessionOpen.toISOString(), sessionClose: window.sessionClose.toISOString(),
       generatedAt: at.toISOString(), status: "preliminary", nextSession: getMarketState(calendar, window.cutoffAt).nextSession,
       coverage: { universeCount, observedStocks: observations.length, suitableCloseObservations: observations.filter((entry) => entry.price !== null).length,
-        indices: "unavailable", externalNews: "not_configured", dailyReturnRankings: "unavailable", unusualVolume: "not_computed", closingPrices: "unverified" },
+        indices: "unavailable", externalNews: "Only matched stored news in the report window is included; coverage unverified", dailyReturnRankings: "unavailable", unusualVolume: "not_computed", closingPrices: "unverified" },
       observations, movements, filings: notices, researchWatchlist: notices.filter((entry) => entry.classification !== "IGNORE"),
       omittedStocks: universeCount - observations.length, omittedFilings: filingCount - notices.length, omittedMovements: signalCount - movements.length,
       limitations: ["Preliminary tracked-stock summary; stored quotes are not verified official closing prices.",
         "Intraday trigger percentages are not daily gainers/losers or investment recommendations.",
-        "No verified Nifty/Sensex performance, unusual-volume baseline or external-news feed is available.",
+        "No verified Nifty/Sensex performance or unusual-volume baseline is available. External news is unverified and only included when matched and stored by the cutoff.",
         "Existing AI research is unverified; a nearby filing does not establish the cause of a price move."],
     };
     const markdown = [`# Swing — Market Summary | ${date} | PRELIMINARY`,

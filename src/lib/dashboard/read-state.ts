@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 
-// Single personal workspace until sign-in is introduced. Identity is server-owned.
+// Single authenticated owner workspace. Identity is server-owned.
 export const WORKSPACE_OWNER = "workspace-owner";
 export const readInputSchema = z.object({
   kind: z.enum(["announcement", "movement", "briefing"]),

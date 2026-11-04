@@ -1,10 +1,10 @@
+import { supportedFeedWhere } from "../announcements/coverage";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { CalendarError, getMarketDay, marketDate, type MarketCalendar } from "../market/calendar";
-import { NSE_SOURCE } from "../announcements/rss";
 import { RELEVANCE_RULE_VERSION } from "../announcements/filter";
 import { RESEARCH_PROMPT_VERSION } from "../research/schema";
 
-export const MORNING_VERSION = "morning-v1";
+export const MORNING_VERSION = "morning-v2";
 export class BriefingError extends Error {
   constructor(public readonly code: string) { super(`Morning briefing: ${code}`); }
 }
@@ -60,7 +60,7 @@ export async function generateMorningBriefing(db: PrismaClient, calendar: Market
     const prior = await tx.dailyBriefing.findUnique({ where: { kind_sessionDate_reportVersion: identity } });
     if (prior) return { status: "existing", report: prior };
     const eligible = {
-      matchStatus: "matched" as const,
+      AND: [supportedFeedWhere], matchStatus: "matched" as const,
       instrument: { active: true, inUniverse: true, exchange: "NSE", kind: "equity" as const },
       matchCheckedAt: { lte: window.cutoffAt }, relevanceCheckedAt: { lte: window.cutoffAt },
       relevanceStatus: { in: ["keep" as const, "review" as const] }, relevanceRuleVersion: RELEVANCE_RULE_VERSION,
@@ -79,7 +79,7 @@ export async function generateMorningBriefing(db: PrismaClient, calendar: Market
     const candidates = filings.filter((entry) => safeUrl(entry.url)).map((entry) => {
       const research = entry.research[0];
       return { feedItemId: entry.id, symbol: entry.instrument!.symbol, name: entry.instrument!.name,
-        title: entry.title.slice(0, 1000), url: safeUrl(entry.url)!, publishedAt: entry.publishedAt!.toISOString(), discoveredAt: entry.discoveredAt.toISOString(),
+        source: entry.source, title: entry.title.slice(0, 1000), url: safeUrl(entry.url)!, publishedAt: entry.publishedAt!.toISOString(), discoveredAt: entry.discoveredAt.toISOString(),
         classification: research?.classification ?? null,
         research: research ? { id: research.id, provider: research.provider, model: research.model, summary: research.summary, significance: research.significance, risks: research.risks, uncertainties: research.uncertainties, createdAt: research.createdAt.toISOString() } : null,
       };
@@ -91,12 +91,12 @@ export async function generateMorningBriefing(db: PrismaClient, calendar: Market
       sessionDate: date, cutoffAt: window.cutoffAt.toISOString(), windowStart: window.windowStart.toISOString(), windowBasis: window.windowBasis,
       generatedAt: at.toISOString(), generatedAfterOpen: at >= window.opensAt,
       coverage: { universeCount, collectionStatus, lastPipelineCompletedAt: lastSuccess?.toISOString() ?? null,
-        externalNews: "not_configured", earningsCalendar: "not_configured", globalMarkets: "not_configured", priceOutlook: "not_provided" },
+        externalNews: "Only matched stored news in the report window is included; coverage unverified", earningsCalendar: "not_configured", globalMarkets: "not_configured", priceOutlook: "not_provided" },
       totalEligibleFilings: total, undatedFilingsExcluded: undatedCount, omittedFilings: total - items.length,
       watchlist: items.filter((entry) => entry.classification !== "IGNORE"), filings: items,
       limitations: ["Tracked-stock filings and existing research only; source completeness and distribution delay are not verified.",
         "Existing AI research is unverified and is not a trade recommendation.",
-        "No earnings schedule, global-market feed, external-news feed or opening-price prediction is available."],
+        "No earnings schedule, global-market feed or opening-price prediction is available. External news is unverified and only included when matched and stored by the cutoff."],
     };
     const markdown = [`# Swing — Morning Briefing | ${date} | 08:45 IST`,
       `Information cutoff: ${ist(window.cutoffAt)}. Window begins ${ist(window.windowStart)} (${window.windowBasis === "previous_session_close" ? "since the previous session closed" : "24-hour fallback; earlier calendar coverage is unavailable"}).`,

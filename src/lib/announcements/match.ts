@@ -1,3 +1,4 @@
+import { supportedFeedWhere } from "./coverage";
 import type { PrismaClient } from "../../generated/prisma/client";
 
 type MatchInstrument = { id: string; symbol: string; name: string; bseCode?: string | null };
@@ -18,7 +19,7 @@ function withoutLegalSuffix(value: string) {
 export function matchAnnouncement(title: string, instruments: MatchInstrument[]): StockMatch {
   // NSE issuer headings usually use "Company - Subject". Restrict matching to
   // this heading: a company mentioned in the body is not necessarily the issuer.
-  const issuer = normalize(title.replace(/^\s*NSE\s*:\s*/i, "").split(/[-–—:|]/, 1)[0]);
+  const issuer = normalize(title.replace(/^\s*NSE\s*:\s*/i, "").split(/\s+[-–—]\s+|[:|]/, 1)[0]);
   if (!issuer) return { status: "unmatched", instrumentId: null };
   const candidates = instruments.filter((instrument) => {
     const name = normalize(instrument.name);
@@ -40,7 +41,7 @@ export async function matchStoredAnnouncements(db: PrismaClient) {
   let cursor: string | undefined;
   while (true) {
     const items = await db.feedItem.findMany({
-      where: { matchStatus: { not: "matched" }, ...(cursor ? { id: { gt: cursor } } : {}) },
+      where: { AND: [supportedFeedWhere], matchStatus: { not: "matched" }, ...(cursor ? { id: { gt: cursor } } : {}) },
       orderBy: { id: "asc" }, take: 100, select: { id: true, title: true, source: true, issuerCode: true },
     });
     if (!items.length) break;
