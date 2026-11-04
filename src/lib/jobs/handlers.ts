@@ -1,3 +1,4 @@
+import { collectSource } from "../announcements/sources";
 import { z } from "zod";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { fetchAnnouncements, AnnouncementFeedError } from "../announcements/rss";
@@ -24,7 +25,8 @@ import { MarketDataError } from "../market-data/provider";
 
 import { followUpPayload, updateResearchFollowUps } from "../research/followups";
 
-export const JOB_KINDS = ["research.followups", "prices.collect", "database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
+export const JOB_KINDS = ["sources.collect", "research.followups", "prices.collect", "database.check", "announcements.fetch", "announcements.match", "announcements.filter", "announcements.analyze", "announcements.pipeline", "movements.research", "briefings.morning", "briefings.closing", "briefings.reassess"] as const;
+const sourcePayload = z.object({ sourceId: z.string().min(1).max(100) }).strict();
 const emptyPayload = z.object({}).strict();
 const analysisPayload = z.object({ limit: z.number().int().min(1).max(20).default(1) }).strict();
 const pipelinePayload = z.object({ analyze: z.boolean().default(false), analysisLimit: z.number().int().min(1).max(20).default(1) }).strict();
@@ -33,7 +35,7 @@ const briefingPayload = z.object({ sessionDate: z.string().regex(/^\d{4}-\d{2}-\
 
 export function validateJobPayload(kind: string, payload: unknown) {
   if (!(JOB_KINDS as readonly string[]).includes(kind)) throw new JobError("UNSUPPORTED_JOB_KIND", true);
-  const result = (kind === "research.followups" ? followUpPayload : kind === "prices.collect" ? priceJobSchema : ["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
+  const result = (kind === "sources.collect" ? sourcePayload : kind === "research.followups" ? followUpPayload : kind === "prices.collect" ? priceJobSchema : ["briefings.morning", "briefings.closing", "briefings.reassess"].includes(kind) ? briefingPayload : kind === "movements.research" ? movementPayload : kind === "announcements.pipeline" ? pipelinePayload : kind === "announcements.analyze" ? analysisPayload : emptyPayload).safeParse(payload);
   if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
   return result.data;
 }
@@ -64,6 +66,13 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     signal.throwIfAborted();
   };
   return {
+    "sources.collect": async (job, signal) => {
+      const payload = sourcePayload.parse(job.payload);
+      await collectSource(db, payload.sourceId, signal);
+      signal.throwIfAborted();
+      await matchStoredAnnouncements(db);
+      await filterStoredAnnouncements(db);
+    },
     "research.followups": async (job, signal) => {
       const payload = followUpPayload.safeParse(job.payload);
       if (!payload.success) throw new JobError("INVALID_JOB_PAYLOAD", true);

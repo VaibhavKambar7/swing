@@ -1122,3 +1122,19 @@ up to 30 calendar days (bounded to 5,000 observations), requiring at least 20
 pairs across five sessions. Zero variance or insufficient history stays
 unavailable. Snapshot IDs are retained in signal context. Comparable intraday
 volume is unavailable from this adapter; no daily-volume proxy is invented.
+
+## Worker controls and observational outcomes
+
+`/system/controls` queues every supported operation with server-validated JSON and
+a per-form deduplication key. It shows recent states and links to retry history.
+Cancellation is cooperative: pending work is finalized without execution; running
+work receives cancellation at its next lease check. Already stored evidence is
+not undone and an external call may already have completed. Explicit retry clears
+cancellation while retaining the earlier failure audit.
+
+Follow-up methodology v2 freezes the benchmark mapping with the contemporaneous
+reference and looks for aligned index observations recorded by the target
+window's deadline. `/outcomes` shows raw source-price changes, benchmark changes,
+and percentage-point differences where available. Earlier versions remain
+immutable. Corporate actions and adjustments remain explicitly unverified; these
+observations never establish investment returns, trading execution or causality.

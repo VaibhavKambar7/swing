@@ -15,8 +15,8 @@ export async function comparisonChange(db: PrismaClient, calendar: MarketCalenda
   const [reference, observed] = await Promise.all([get(start), get(end)]);
   if (!reference?.quoteTime || !reference.quotePrice || !observed?.quoteTime || !observed.quotePrice) return { status: "unavailable" as const, reason: "ALIGNED_INDEX_QUOTES_MISSING", symbol: instrument.symbol };
   if (reference.providerSymbol !== observed.providerSymbol || reference.quoteTime >= observed.quoteTime || reference.retrievedAt < reference.quoteTime || observed.retrievedAt < observed.quoteTime) return { status: "unavailable" as const, reason: "INCOMPATIBLE_INDEX_QUOTES" };
-  for (const [target, quote] of [[start, reference], [end, observed]] as const) {
-    const state = getMarketState(calendar, target);
+  for (const [_target, quote] of [[start, reference], [end, observed]] as const) {
+    const state = getMarketState(calendar, quote.quoteTime!);
     if (state.status !== "open" || !state.currentSession || quote.quoteTime! < new Date(state.currentSession.opensAt)) return { status: "unavailable" as const, reason: "INDEX_QUOTES_OUTSIDE_SESSION" };
   }
   const changePct = percentageChange(reference.quotePrice.toString(), observed.quotePrice.toString());

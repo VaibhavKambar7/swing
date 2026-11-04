@@ -25,6 +25,8 @@ export async function runJobOnce(db: PrismaClient, workerId: string, handlers: J
   let done = false;
   const renew = async () => {
     try {
+      const current = await db.job.findUnique({ where: { id: job.id }, select: { cancelRequestedAt: true } });
+      if (current?.cancelRequestedAt) controller.abort();
       if (!await renewJobLease(db, job)) controller.abort();
     } catch {
       controller.abort();

@@ -35,14 +35,14 @@ export async function enqueueJob(db: PrismaClient, input: { kind: string; dedupe
 export async function recoverExpiredJobs(db: PrismaClient) {
   return db.$executeRaw`
     UPDATE jobs SET
-      status = CASE WHEN attempts >= max_attempts THEN 'failed'::job_status ELSE 'retry'::job_status END,
-      completed_at = CASE WHEN attempts >= max_attempts THEN clock_timestamp() ELSE NULL END,
+      status = CASE WHEN cancel_requested_at IS NOT NULL THEN 'failed'::job_status WHEN attempts >= max_attempts THEN 'failed'::job_status ELSE 'retry'::job_status END,
+      completed_at = CASE WHEN cancel_requested_at IS NOT NULL OR attempts >= max_attempts THEN clock_timestamp() ELSE NULL END,
       run_after = clock_timestamp() + LEAST(300000, 5000 * power(2, LEAST(6, GREATEST(0, attempts - 1)))) * interval '1 millisecond',
       locked_by = NULL, locked_until = NULL,
-      last_error_code = CASE WHEN status = 'running' THEN 'LEASE_EXPIRED' ELSE 'ATTEMPTS_EXHAUSTED' END,
+      last_error_code = CASE WHEN cancel_requested_at IS NOT NULL THEN 'JOB_CANCELLED' WHEN status = 'running' THEN 'LEASE_EXPIRED' ELSE 'ATTEMPTS_EXHAUSTED' END,
       updated_at = clock_timestamp()
     WHERE (status = 'running' AND locked_until <= clock_timestamp())
-       OR (status IN ('pending', 'retry') AND attempts >= max_attempts)
+       OR (status IN ('pending', 'retry') AND (attempts >= max_attempts OR cancel_requested_at IS NOT NULL))
   `;
 }
 
@@ -51,7 +51,7 @@ export async function claimJob(db: PrismaClient, workerId: string): Promise<Clai
   const rows = await db.$queryRaw<ClaimedJob[]>`
     WITH candidate AS (
       SELECT id FROM jobs
-      WHERE status IN ('pending', 'retry') AND run_after <= clock_timestamp() AND attempts < max_attempts
+      WHERE status IN ('pending', 'retry') AND cancel_requested_at IS NULL AND run_after <= clock_timestamp() AND attempts < max_attempts
       ORDER BY run_after, created_at, id
       FOR UPDATE SKIP LOCKED LIMIT 1
     )
@@ -76,10 +76,10 @@ export async function finishJob(db: PrismaClient, job: ClaimedJob, error?: JobEr
   const failed = !!error && (error.permanent || job.attempts >= job.maxAttempts);
   const status = error ? (failed ? "failed" : "retry") : "succeeded";
   const count = await db.$executeRaw`
-    UPDATE jobs SET status = ${status}::job_status,
-      completed_at = CASE WHEN ${status} IN ('succeeded', 'failed') THEN clock_timestamp() ELSE NULL END,
+    UPDATE jobs SET status = CASE WHEN cancel_requested_at IS NOT NULL THEN 'failed'::job_status ELSE ${status}::job_status END,
+      completed_at = CASE WHEN cancel_requested_at IS NOT NULL OR ${status} IN ('succeeded', 'failed') THEN clock_timestamp() ELSE NULL END,
       run_after = CASE WHEN ${status} = 'retry' THEN clock_timestamp() + ${retryDelayMs(job.attempts)} * interval '1 millisecond' ELSE run_after END,
-      locked_by = NULL, locked_until = NULL, last_error_code = ${error?.code ?? null}, updated_at = clock_timestamp()
+      locked_by = NULL, locked_until = NULL, last_error_code = CASE WHEN cancel_requested_at IS NOT NULL THEN 'JOB_CANCELLED' ELSE ${error?.code ?? null} END, updated_at = clock_timestamp()
     WHERE id = ${job.id}::uuid AND status = 'running' AND locked_by = ${job.lockedBy} AND locked_until > clock_timestamp()
   `;
   return count === 1 ? status : "lease_lost";

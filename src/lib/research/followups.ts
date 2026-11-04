@@ -1,7 +1,8 @@
+import { comparisonChange } from "../market-data/context";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { CalendarError, getMarketDay, getMarketState, marketDate, type MarketCalendar } from "../market/calendar";
-export const FOLLOWUP_VERSION = "first-observation-to-future-session-close-v1";
+export const FOLLOWUP_VERSION = "first-observation-to-future-session-close-v2";
 export const followUpPayload = z.object({ limit: z.number().int().min(1).max(100).default(25) }).strict();
 const MINUTE = 60000;
 const Calc = Prisma.Decimal.clone({ precision: 60 });
@@ -56,17 +57,20 @@ export async function updateResearchFollowUps(db: PrismaClient, calendar: Market
       if (!instrumentId) return save("unavailable", "INSTRUMENT_UNAVAILABLE");
       try {
         let reference = row.referenceSnapshot;
+        let frozenComparison = row.comparison && typeof row.comparison === "object" && !Array.isArray(row.comparison) ? row.comparison : null;
         if (!reference) {
           const window = referenceWindow(calendar, publishedAt);
           // Requiring retrieval AND recording by the reference deadline prevents
           // later historical imports from inventing a contemporaneous baseline.
           const deadline = new Date(Math.min(at.getTime(), window.end.getTime()));
-          reference = await tx.marketSnapshotRecord.findFirst({ where: { instrumentId, provider: "yahoo-experimental", currency: "INR",
+          reference = await tx.marketSnapshotRecord.findFirst({ where: { instrumentId, currency: "INR",
             quotePrice: { not: null }, quoteFreshness: "recent", quoteAgeSeconds: { gte: 0, lte: 300 },
             quoteTime: { gte: window.start, lte: deadline }, retrievedAt: { gte: window.start, lte: deadline }, recordedAt: { lte: deadline, gte: window.start },
           }, orderBy: [{ quoteTime: "asc" }, { retrievedAt: "asc" }, { id: "asc" }] });
           if (!reference) return save(at < window.end ? "pending" : "unavailable", at < window.end ? "AWAITING_REFERENCE" : "REFERENCE_WINDOW_MISSING");
-          await tx.researchFollowUp.update({ where: { id }, data: { referenceSnapshotId: reference.id, referenceAt: reference.quoteTime, referencePrice: reference.quotePrice, updatedAt: at } });
+          const stock = await tx.instrument.findUniqueOrThrow({ where: { id: instrumentId }, select: { benchmarkId: true } });
+          frozenComparison = { benchmarkId: stock.benchmarkId, status: "pending", priceBasis: "provider_native_unverified", corporateActions: "unverified", disclaimer: "Observational price changes only; splits, dividends, costs and execution are not accounted for." };
+          await tx.researchFollowUp.update({ where: { id }, data: { comparison: frozenComparison, referenceSnapshotId: reference.id, referenceAt: reference.quoteTime, referencePrice: reference.quotePrice, updatedAt: at } });
         }
         const window = targetWindow(calendar, reference.quoteTime!, row.horizonSessions);
         await tx.researchFollowUp.update({ where: { id }, data: { dueAt: window.end, updatedAt: at } });
@@ -80,7 +84,11 @@ export async function updateResearchFollowUps(db: PrismaClient, calendar: Market
         if (base.lte(0) || price.lte(0) || !base.isFinite() || !price.isFinite()) return save("unavailable", "INVALID_OBSERVATION_PRICE");
         const change = price.minus(base).div(base).mul(100).toDecimalPlaces(8, Prisma.Decimal.ROUND_HALF_UP);
         if (change.abs().gte("10000000000")) return save("unavailable", "CHANGE_OUT_OF_RANGE");
-        await tx.researchFollowUp.update({ where: { id }, data: { status: "measured", reason: "UNVERIFIED_SOURCE_PRICE_CHANGE", observedSnapshotId: observed.id, observedAt: observed.quoteTime, observedPrice: observed.quotePrice, changePct: change.toFixed(8), updatedAt: at } });
+        // Benchmark mapping is frozen with the reference, not taken from future membership.
+        const benchmarkId = typeof frozenComparison?.benchmarkId === "string" ? frozenComparison.benchmarkId : null;
+        const benchmark = await comparisonChange(tx as unknown as PrismaClient, calendar, benchmarkId, reference.quoteTime!, observed.quoteTime!, window.end, reference.provider);
+        const comparison = { ...frozenComparison, benchmark, excessChangePercentagePoints: benchmark.status === "observed" ? change.minus(benchmark.changePct!).toFixed(8) : null };
+        await tx.researchFollowUp.update({ where: { id }, data: { comparison, status: "measured", reason: "UNVERIFIED_SOURCE_PRICE_CHANGE", observedSnapshotId: observed.id, observedAt: observed.quoteTime, observedPrice: observed.quotePrice, changePct: change.toFixed(8), updatedAt: at } });
         return "measured" as const;
       } catch (error) {
         if (error instanceof CalendarError) return save("pending", error.code);

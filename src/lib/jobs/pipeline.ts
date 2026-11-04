@@ -16,7 +16,12 @@ export function createPipelineStages(db: PrismaClient) {
     analyze: (limit: number) => analyzeStoredAnnouncements(db, createGeminiProvider(), limit),
   };
 }
-export type PipelineStages = ReturnType<typeof createPipelineStages>;
+export type PipelineStages = {
+ fetch: () => Promise<{ received: number; inserted: number; duplicates: number; failed?: number }>;
+ match: ReturnType<typeof createPipelineStages>["match"];
+ filter: ReturnType<typeof createPipelineStages>["filter"];
+ analyze: ReturnType<typeof createPipelineStages>["analyze"];
+};
 
 export async function runAnnouncementPipeline(
   stages: PipelineStages, options: { analyze: boolean; analysisLimit: number }, signal: AbortSignal,

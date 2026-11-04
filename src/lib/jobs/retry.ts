@@ -25,7 +25,7 @@ export async function retryFailedJob(db: PrismaClient, input: unknown, at = new 
       previousLimit: job.maxAttempts, previousError: publicErrorCode(job.lastErrorCode), previousFinishedAt: job.completedAt, requestedAt: at, reason: reason || null,
     } });
     await tx.job.update({ where: { id }, data: { status: "pending", attempts: 0, runAfter: at, completedAt: null,
-      lockedBy: null, lockedUntil: null, lastErrorCode: null, updatedAt: at,
+      cancelRequestedAt: null, lockedBy: null, lockedUntil: null, lastErrorCode: null, updatedAt: at,
     } });
     return { ok: true, message: "Job queued for another bounded attempt cycle. The worker will process it." };
   });

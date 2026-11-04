@@ -396,6 +396,7 @@ model Job {
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
+  cancelRequestedAt DateTime? @map("cancel_requested_at") @db.Timestamptz(6)
   retryRequests JobRetryRequest[]
   signal Signal? @relation("jobs_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_signal_id_signals_id_fk")
   alert  Alert?  @relation("jobs_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_alert_id_alerts_id_fk")
@@ -592,6 +593,7 @@ model JobRetryRequest {
 }
 
 model ResearchFollowUp {
+  comparison Json? @db.JsonB
   id                  String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   feedResearchId      String? @map("feed_research_id") @db.Uuid
   analysisId          String? @map("analysis_id") @db.Uuid
