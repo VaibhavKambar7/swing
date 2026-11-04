@@ -47,6 +47,8 @@ function runtimeStatus() {
     ready: !stopping && databaseReady && jobsReady && schedulerReady,
     checks: { database: databaseReady ? "up" : "down", jobs: jobsReady ? "up" : "down", scheduler: !env.WORKER_SCHEDULER_ENABLED ? "disabled" : schedulerReady ? "up" : "down" },
     startedAt, activeJob: activeJobInfo,
+    priceMonitoring: { enabled: env.WORKER_SCHEDULER_ENABLED && env.WORKER_PRICES_ENABLED, symbols: env.WORKER_PRICE_SYMBOLS },
+    followUpsEnabled: env.WORKER_SCHEDULER_ENABLED && env.WORKER_FOLLOWUPS_ENABLED,
     lastDatabaseCheckAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
     lastJobPollAt: lastJobPollAt ? new Date(lastJobPollAt).toISOString() : null,
     lastSchedulerTickAt: lastSchedulerTickAt ? new Date(lastSchedulerTickAt).toISOString() : null,

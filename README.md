@@ -1037,3 +1037,19 @@ Corporate actions, fees, trade execution, dividends and benchmarks are absent;
 this is not verified investment performance or evidence of causal prediction.
 Follow-up jobs do not fetch prices, run AI, or send external notifications. Code,
 migrations, and measurement behavior remain untested during this coding phase.
+
+## Per-stock source diagnostics — Part 8.5b
+
+`/system/prices` shows up to 500 active universe stocks with their latest Yahoo
+retrieval, quote timestamp/price, wall-clock recency, unknown distribution delay,
+and safe per-stock automated collection errors/success times. The newest retrieval
+is retained even when its quote is absent. Display limits are explicit; they do
+not redefine the universe. Missing, invalid/future, recent and stale observations
+remain distinct. Stale quotes outside sessions are expected, not proof of failure.
+
+Worker status now reports its actual polling selection/enabled state and the
+follow-up job opt-in. If worker configuration cannot be observed, diagnostics
+label the web configuration as a fallback rather than assuming the worker shares
+it. Configured symbols outside active coverage are listed separately. These are
+read-only stored-data diagnostics; no provider requests or recovery actions run
+when the page opens. Validation remains deferred.
