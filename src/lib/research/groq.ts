@@ -4,7 +4,7 @@ import { ResearchError, researchSchemaFor, type ResearchProvider } from "./schem
 export function createGroqProvider(env: Record<string, string | undefined> = process.env, fetcher: typeof fetch = fetch): ResearchProvider {
   const key = env.GROQ_API_KEY?.trim();
   if (!key) throw new ResearchError("missing_groq_api_key");
-  const model = env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+  const model = env.GROQ_MODEL ?? "openai/gpt-oss-20b";
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,150}$/.test(model)) throw new ResearchError("invalid_groq_model");
   return { name: "groq", model, async analyze(input, signal) {
     const ids = "movement" in input ? input.evidence.map((e) => e.id) : ["announcement"];

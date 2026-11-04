@@ -113,7 +113,7 @@ rolling windows. Neither is a guarantee of complete historical/current coverage.
 Live endpoint shape, access and usefulness still require validation.
 
 Research uses Gemini's real JSON API behind `ResearchProvider`. Set
-`GEMINI_API_KEY` securely and optionally `GEMINI_MODEL` (default `gemini-2.5-flash`).
+`GEMINI_API_KEY` securely and optionally `GEMINI_MODEL` (default `gemini-3.8-flash`).
 Explicit research jobs and separately enabled scheduled AI can consume quota.
 Collection and evidence linking do not implicitly run AI. Inputs are bounded and
 untrusted; output validation rejects invalid classifications and evidence IDs.
@@ -268,7 +268,7 @@ backup/restore drills still require your separate operational validation.
 ### AI provider routing
 
 Set `RESEARCH_PROVIDER=groq`, `GROQ_API_KEY`, and optionally `GROQ_MODEL`
-(default `llama-3.3-70b-versatile`). `RESEARCH_FALLBACK_PROVIDER=gemini` uses
+(default `openai/gpt-oss-20b`). `RESEARCH_FALLBACK_PROVIDER=gemini` uses
 `GEMINI_API_KEY`/`GEMINI_MODEL` if Groq fails or returns invalid output. Both use
 validated evidence IDs and the same conservative research contract. Cancellation
 never starts fallback. Stored provider/model and token usage identify the actual

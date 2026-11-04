@@ -8,14 +8,14 @@ describe("Groq primary and Gemini fallback", () => {
   it("calls Groq first, validates output, and records actual provider/model", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(assessment) } }], usage: { prompt_tokens: 12, completion_tokens: 34 } })));
     const result = await createResearchProvider(env, fetcher).analyze(input);
-    expect(result).toMatchObject({ provider: "groq", model: "llama-3.3-70b-versatile", inputTokens: 12, outputTokens: 34 });
+    expect(result).toMatchObject({ provider: "groq", model: "openai/gpt-oss-20b", inputTokens: 12, outputTokens: 34 });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0][0]).toBe("https://api.groq.com/openai/v1/chat/completions");
   });
   it("falls back after provider failure without mislabelling Gemini output", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("rate limit", { status: 429 })).mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(assessment) }] } }] })));
     const result = await createResearchProvider(env, fetcher).analyze(input);
-    expect(result.provider).toBe("gemini"); expect(result.model).toBe("gemini-2.5-flash");
+    expect(result.provider).toBe("gemini"); expect(result.model).toBe("gemini-3.8-flash");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it("never starts fallback after cancellation", async () => {

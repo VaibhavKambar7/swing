@@ -30,7 +30,7 @@ export function createGeminiProvider(
 ): ResearchProvider {
   const apiKey = env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new ResearchError("missing_gemini_api_key");
-  const model = env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const model = env.GEMINI_MODEL ?? "gemini-3.8-flash";
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(model)) throw new ResearchError("invalid_gemini_model");
   return {
     name: "gemini", model,
