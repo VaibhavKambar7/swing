@@ -27,6 +27,7 @@ CMD ["node", "server.js"]
 
 FROM dependencies AS worker
 WORKDIR /app
+COPY --from=dependencies --chown=node:node /app/package.json ./package.json
 ENV NODE_ENV=production
 COPY --chown=node:node src ./src
 COPY --chown=node:node tsconfig.json ./
