@@ -55,3 +55,9 @@ coverage/
 
 # Local exchange calendar configuration (maintained separately from source).
 /config/market-calendar.local.json
+
+# Database archives are private operational data.
+*.dump
+*.dump.json
+*.dump.partial
+*.dump.json.partial

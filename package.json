@@ -34,7 +34,9 @@
     "movements:research": "node --use-env-proxy --import tsx scripts/research-movement.ts",
     "briefings:morning": "tsx scripts/morning-briefing.ts",
     "briefings:closing": "tsx scripts/closing-briefing.ts",
-    "briefings:reassess": "tsx scripts/reassess-watchlist.ts"
+    "briefings:reassess": "tsx scripts/reassess-watchlist.ts",
+    "db:backup": "tsx scripts/backup-db.ts",
+    "db:restore": "tsx scripts/restore-db.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

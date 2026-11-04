@@ -981,3 +981,12 @@ so drafts are not replaced automatically. Read/unread and feedback still require
 explicit saves. These are in-app updates while the app is open, not browser push
 notifications or guaranteed real-time delivery. Live operation and UI verification
 remain deferred. The local single-workspace access model is unchanged.
+
+## Native database backups — Part 8.4a
+
+`npm run db:backup` writes private custom-format PostgreSQL archives and checksum
+manifests to `SWING_BACKUP_DIR`. `npm run db:restore -- <archive> --confirm-empty-target`
+requires `RESTORE_DATABASE_URL` for a separate empty database and restores in one
+transaction without dropping existing objects. See [backup and recovery](docs/operations/backups.md)
+for connection requirements, private storage, and the recovery drill. No backup,
+restore, deployment, or validation command has been run for this implementation.
