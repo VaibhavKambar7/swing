@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { accessConfigured, authorize } from "./lib/auth/access";
+import { accessConfigured, authDisabled, authorize } from "./lib/auth/access";
 // Every page, action, API and diagnostic passes through the same fail-closed gate.
+// SWING_AUTH_DISABLED=true is a local-only escape hatch; keep it unset when hosted.
 export function proxy(request: NextRequest) {
-  if (!accessConfigured()) return new NextResponse("Configure SWING_AUTH_USER and a SWING_AUTH_PASSWORD of at least 24 characters.", { status: 503 });
-  if (!authorize(request.headers.get("authorization"))) return new NextResponse("Authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Swing", charset="UTF-8"', "Cache-Control": "no-store" } });
+  if (!authDisabled()) {
+    if (!accessConfigured()) return new NextResponse("Configure SWING_AUTH_USER and a SWING_AUTH_PASSWORD of at least 24 characters.", { status: 503 });
+    if (!authorize(request.headers.get("authorization"))) return new NextResponse("Authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Swing", charset="UTF-8"', "Cache-Control": "no-store" } });
+  }
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     const origin = request.headers.get("origin");
     const expected = process.env.SWING_PUBLIC_ORIGIN ?? request.nextUrl.origin;

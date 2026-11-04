@@ -2,6 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 function equal(left: string, right: string) {
   return timingSafeEqual(createHash("sha256").update(left).digest(), createHash("sha256").update(right).digest());
 }
+export function authDisabled(env: Record<string, string | undefined> = process.env) {
+  return env.SWING_AUTH_DISABLED === "true";
+}
 export function accessConfigured(env: Record<string, string | undefined> = process.env) {
   return Boolean(env.SWING_AUTH_USER && env.SWING_AUTH_PASSWORD && env.SWING_AUTH_PASSWORD.length >= 24);
 }

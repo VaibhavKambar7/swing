@@ -19,7 +19,7 @@ describe("web route gate", () => {
     const { vi } = await import("vitest");
     const { NextRequest } = await import("next/server");
     const { proxy } = await import("../src/proxy");
-    vi.stubEnv("SWING_AUTH_USER", "owner"); vi.stubEnv("SWING_AUTH_PASSWORD", "s".repeat(32)); vi.stubEnv("SWING_PUBLIC_ORIGIN", "https://swing.example.com");
+    vi.stubEnv("SWING_AUTH_DISABLED", "false"); vi.stubEnv("SWING_AUTH_USER", "owner"); vi.stubEnv("SWING_AUTH_PASSWORD", "s".repeat(32)); vi.stubEnv("SWING_PUBLIC_ORIGIN", "https://swing.example.com");
     try {
       const authorization = "Basic " + Buffer.from(`owner:${"s".repeat(32)}`).toString("base64");
       for (const path of ["/", "/system/controls", "/api/workspace/activity", "/api/health/ready"]) expect(proxy(new NextRequest(`https://swing.example.com${path}`)).status).toBe(401);
@@ -28,6 +28,17 @@ describe("web route gate", () => {
       expect(proxy(new NextRequest("https://swing.example.com/", { method: "POST", headers: { authorization, origin: "https://swing.example.com" } })).status).toBe(200);
       vi.stubEnv("SWING_AUTH_PASSWORD", "");
       expect(proxy(new NextRequest("https://swing.example.com/", { headers: { authorization } })).status).toBe(503);
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it("allows local no-login mode without dropping same-origin protection", async () => {
+    const { vi } = await import("vitest");
+    const { NextRequest } = await import("next/server");
+    const { proxy } = await import("../src/proxy");
+    vi.stubEnv("SWING_AUTH_DISABLED", "true"); vi.stubEnv("SWING_PUBLIC_ORIGIN", "https://swing.example.com");
+    try {
+      expect(proxy(new NextRequest("https://swing.example.com/")).status).toBe(200);
+      expect(proxy(new NextRequest("https://swing.example.com/", { method: "POST", headers: { origin: "https://attacker.example.com" } })).status).toBe(403);
+      expect(proxy(new NextRequest("https://swing.example.com/", { method: "POST", headers: { origin: "https://swing.example.com" } })).status).toBe(200);
     } finally { vi.unstubAllEnvs(); }
   });
 });
