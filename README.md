@@ -1109,3 +1109,16 @@ headline symbol/full name, and news remains unverified third-party evidence.
 No source is silently substituted on failure. All source adapters have bounded
 responses/timeouts and retain unknown publication dates. Live endpoint shape,
 access and coverage still require your later validation.
+
+## Movement comparisons
+
+New movement records freeze benchmark/sector comparisons using mapped index
+quotes aligned at or before each endpoint within one minute, known by detection
+time, and within the same trading session. Missing mappings or quotes are
+explicitly unavailable. Excess change is a percentage-point difference, not a
+verified excess investment return. The detail view shows both comparisons.
+Usual volatility compares prior non-overlapping 5–6 minute quote changes over
+up to 30 calendar days (bounded to 5,000 observations), requiring at least 20
+pairs across five sessions. Zero variance or insufficient history stays
+unavailable. Snapshot IDs are retained in signal context. Comparable intraday
+volume is unavailable from this adapter; no daily-volume proxy is invented.

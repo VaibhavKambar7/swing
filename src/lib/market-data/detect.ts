@@ -1,3 +1,4 @@
+import { buildMarketContext } from "./context";
 import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient, type MarketSnapshotRecord } from "../../generated/prisma/client";
 import { getMarketState, type MarketCalendar } from "../market/calendar";
@@ -42,7 +43,7 @@ export async function detectStoredMovement(
 ): Promise<StoredMovementResult> {
   const symbol = nseProviderSymbol(instrument).slice(0, -3);
   if (!/^[a-z][a-z0-9-]{0,49}$/.test(provider)) throw new MarketDataError("INVALID_PROVIDER");
-  const stock = await db.instrument.findFirst({ where: { exchange: "NSE", symbol, active: true, inUniverse: true, kind: "equity" }, select: { id: true } });
+  const stock = await db.instrument.findFirst({ where: { exchange: "NSE", symbol, active: true, inUniverse: true, kind: "equity" }, select: { id: true, benchmarkId: true, sectorIndexId: true } });
   if (!stock) throw new MarketDataError("INSTRUMENT_NOT_IN_UNIVERSE");
   const current = await db.marketSnapshotRecord.findFirst({
     where: { instrumentId: stock.id, provider },
@@ -58,6 +59,7 @@ export async function detectStoredMovement(
   }, orderBy: [{ quoteTime: "desc" }, { retrievedAt: "desc" }, { recordedAt: "desc" }, { id: "desc" }] });
   const decision = evaluateMovement(current, reference, calendar, at);
   if (decision.status === "skipped") return decision;
+  const marketContext = await buildMarketContext(db, calendar, stock, provider, reference!.quoteTime!, current!.quoteTime!, decision.changePct, at);
   const key = createHash("sha256").update(JSON.stringify([MOVEMENT_VERSION, stock.id, provider, current!.providerSymbol, current!.quoteTime!.toISOString()])).digest("hex");
   const dedupeKey = `movement:${key}`;
   return db.$transaction(async (tx) => {
@@ -66,7 +68,7 @@ export async function detectStoredMovement(
       observedAt: current!.quoteTime!, windowStart: reference!.quoteTime!,
       price: current!.quotePrice, referencePrice: reference!.quotePrice, priceChangePct: decision.changePct,
       context: {
-        provider, providerSymbol: current!.providerSymbol, currentSnapshotId: current!.id, referenceSnapshotId: reference!.id,
+        marketContext, provider, providerSymbol: current!.providerSymbol, currentSnapshotId: current!.id, referenceSnapshotId: reference!.id,
         detectedAt: at.toISOString(), currentRetrievedAt: current!.retrievedAt.toISOString(), referenceRetrievedAt: reference!.retrievedAt.toISOString(),
         direction: decision.direction, thresholdPct: "2", windowSeconds: 300, referenceToleranceSeconds: 60,
         methodology: "same-provider same-session quote change; no candle baseline",
