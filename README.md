@@ -1065,3 +1065,32 @@ Set `SWING_PUBLIC_ORIGIN` to the exact browser origin for mutation origin checks
 Worker health and diagnostics require an independent `WORKER_ACCESS_TOKEN` of at
 least 32 characters, shared by web and worker. Readiness tooling sends these
 credentials in headers. Loopback binding is additional isolation, not sign-in.
+
+## Maintained universe and provider mappings
+
+`/universe` imports official constituent CSV or this JSON shape. Supply the real
+membership/source/date yourself; the application does not invent Nifty 500 members:
+
+```json
+{"source":"Your official source and retrieval date","effectiveDate":"2026-11-04","members":[{"symbol":"NIFTY50","name":"Nifty 50","kind":"index","yahooSymbol":"^NSEI"},{"symbol":"TCS","name":"Tata Consultancy Services Limited","sector":"IT","benchmark":"NIFTY50"}]}
+```
+
+This example illustrates the format, not a constituent list. JSON also accepts
+`isin`, six-digit `bseCode`, and `sectorIndex` referring to an included index.
+Imports atomically replace membership, retain removed instruments/history, reject
+older effective dates and duplicate symbols, and preserve an immutable import
+snapshot. Repeat identical imports are harmless. CSV has no inferred mappings;
+use JSON for mapped benchmark/sector coverage. Imports support up to 2,000 records.
+
+An empty `WORKER_PRICE_SYMBOLS` now selects all active imported instruments;
+an explicit list restricts collection. Each five-minute slot enqueues at most
+`WORKER_PRICE_BATCH_SIZE` requests (default 20, maximum 100), staggered by
+`WORKER_PRICE_REQUEST_INTERVAL_MS` (default 1 second). A durable round-robin cursor
+prevents starvation; busy stocks do not accumulate work. At 500 stocks and batch
+20 a full sweep takes roughly 125 minutes: this free-provider configuration does
+not promise five-minute coverage for all stocks. Increase the bounded batch only
+within your provider's limits. Index mappings use the same immutable storage and
+collection pipeline but never generate stock movement signals.
+
+`MARKET_DATA_PROVIDER` selects the shared adapter boundary. Yahoo experimental is
+implemented; choosing `kite` fails explicitly because Kite remains deferred.

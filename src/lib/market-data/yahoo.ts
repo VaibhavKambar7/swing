@@ -77,7 +77,7 @@ export function parseYahooSnapshot(
         priceBasis: "provider_native_unverified", completion: "unknown" });
     }
   }
-  return { provider: "yahoo-experimental", instrument: { exchange: "NSE", symbol: providerSymbol.slice(0, -3) }, providerSymbol,
+  return { provider: "yahoo-experimental", instrument: { exchange: "NSE", symbol: instrument.symbol.trim().toUpperCase(), ...(instrument.providerSymbol ? { providerSymbol: instrument.providerSymbol } : {}) }, providerSymbol,
     retrievedAt: retrievedAt.toISOString(), requestedCalendarDays: days, quote, candles, skippedBars };
 }
 

@@ -1,0 +1,13 @@
+import { getDatabase } from "@/lib/db";
+import { Header, Panel, Note, Unavailable } from "@/components/dashboard/components";
+import { loadRead } from "@/lib/dashboard/queries";
+import { saveUniverse } from "./actions";
+export default async function Universe({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+  const { status } = await searchParams;
+  const data = await loadRead(async () => ({ stocks: await getDatabase().instrument.findMany({ where: { inUniverse: true }, orderBy: { symbol: "asc" }, take: 2000 }), imports: await getDatabase().universeImport.findMany({ orderBy: { importedAt: "desc" }, take: 10 }) }));
+  return <><Header title="Research universe" description="Import your maintained Nifty 500 membership and comparison indexes. No current constituent list is assumed." />
+    {status && <Note>{status === "saved" ? "Membership saved." : status === "unchanged" ? "Identical import already saved." : "Import failed. Check the documented format, source, date, duplicates and index mappings; older memberships are rejected. Existing membership was preserved."}</Note>}
+    <Panel title="Replace membership"><Note>This replaces active coverage, preserving all research and removed instruments. CSV accepts official Company Name, Symbol, Industry, ISIN Code columns. JSON supports explicit index/provider mappings; see README. Include all members, not only changes.</Note><form action={saveUniverse}><label>Format <select name="format"><option value="csv">Constituent CSV</option><option value="json">Universe JSON</option></select></label><label>CSV source <input name="source" maxLength={500} /></label><label>CSV effective date <input name="effectiveDate" type="date" /></label><label>Paste membership <textarea name="content" required rows={12} maxLength={800000} /></label><label><input name="confirm" value="yes" type="checkbox" required /> Replace coverage with this complete membership</label><button className="button" type="submit">Import membership</button></form></Panel>
+    {!data.ok ? <Unavailable /> : <><Panel title={`Configured coverage (${data.data.stocks.length})`}><div className="table-scroll"><table><thead><tr><th>Symbol</th><th>Name / sector</th><th>Provider mapping</th><th>State</th></tr></thead><tbody>{data.data.stocks.map((s) => <tr key={s.id}><td>{s.symbol} · {s.kind}</td><td>{s.name}<br />{s.sector ?? "Sector unavailable"}</td><td>{s.yahooSymbol ?? `${s.symbol}.NS`}<br />BSE: {s.bseCode ?? "Not mapped"}</td><td>{s.active ? "Active" : "Inactive"}</td></tr>)}</tbody></table></div></Panel><Panel title="Import history">{data.data.imports.map((i) => <p key={i.id}>{i.effectiveDate.toISOString().slice(0, 10)} · {i.source} · imported {i.importedAt.toISOString()}</p>)}</Panel></>}
+  </>;
+}

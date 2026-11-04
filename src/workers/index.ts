@@ -66,7 +66,7 @@ function scheduleTick() {
       env.WORKER_MORNING_BRIEFING_ENABLED ? scheduleMorningBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
       env.WORKER_CLOSING_BRIEFING_ENABLED ? scheduleClosingBriefing(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
       env.WORKER_FOLLOWUPS_ENABLED ? scheduleResearchFollowUps(getDatabase(), now) : Promise.resolve({ status: "disabled" as const }),
-      env.WORKER_PRICES_ENABLED ? schedulePriceCollection(getDatabase(), calendar, env.WORKER_PRICE_SYMBOLS, env.WORKER_PRICE_HISTORY_DAYS, now) : Promise.resolve({ enqueued: 0 }),
+      env.WORKER_PRICES_ENABLED ? schedulePriceCollection(getDatabase(), calendar, env.WORKER_PRICE_SYMBOLS, env.WORKER_PRICE_HISTORY_DAYS, now, env.WORKER_PRICE_BATCH_SIZE, env.WORKER_PRICE_REQUEST_INTERVAL_MS) : Promise.resolve({ enqueued: 0 }),
       env.WORKER_POSTOPEN_ENABLED ? schedulePostOpen(getDatabase(), calendar, now) : Promise.resolve({ status: "disabled" as const }),
     ]);
   }).then(([result, briefing, closing, followUps, prices, postOpen]) => {

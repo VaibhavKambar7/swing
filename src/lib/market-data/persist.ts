@@ -9,7 +9,7 @@ const price = z.string().min(1).max(80);
 const schema = z.object({
   provider: z.string().regex(/^[a-z][a-z0-9-]{0,49}$/),
   providerSymbol: z.string().regex(/^[A-Za-z0-9^&._-]{1,100}$/),
-  instrument: z.object({ exchange: z.literal("NSE"), symbol: z.string() }).strict(),
+  instrument: z.object({ exchange: z.literal("NSE"), symbol: z.string(), providerSymbol: z.string().optional() }).strict(),
   retrievedAt: timestamp, requestedCalendarDays: z.number().int().min(1).max(365), skippedBars: z.number().int().min(0).max(2000),
   quote: z.object({ price, currency: z.literal("INR"), marketTime: timestamp, retrievedAt: timestamp,
     ageSeconds: z.number(), freshness: z.enum(["recent", "stale", "clock_skew"]), delayStatus: z.literal("unknown") }).strict().nullable(),
@@ -32,7 +32,7 @@ export function normalizeMarketSnapshot(value: unknown) {
   if (!parsed.success) throw new MarketDataError("INVALID_MARKET_SNAPSHOT");
   const data = parsed.data;
   const mappedSymbol = nseProviderSymbol(data.instrument);
-  data.instrument.symbol = mappedSymbol.slice(0, -3);
+  data.instrument.symbol = data.instrument.symbol.trim().toUpperCase();
   if (data.provider === "yahoo-experimental" && data.providerSymbol !== mappedSymbol) throw new MarketDataError("INSTRUMENT_METADATA_MISMATCH");
   data.retrievedAt = new Date(data.retrievedAt).toISOString();
   const retrieved = Date.parse(data.retrievedAt);
@@ -70,7 +70,8 @@ export async function storeMarketSnapshot(db: PrismaClient, value: unknown) {
   const snapshot = normalizeMarketSnapshot(value);
   const hash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
   return db.$transaction(async (tx) => {
-    const instrument = await tx.instrument.findFirst({ where: { exchange: snapshot.instrument.exchange, symbol: snapshot.instrument.symbol, kind: "equity", active: true, inUniverse: true }, select: { id: true } });
+    const instrument = await tx.instrument.findFirst({ where: { exchange: snapshot.instrument.exchange, symbol: snapshot.instrument.symbol, active: true, inUniverse: true }, select: { id: true, yahooSymbol: true, kind: true } });
+    if (snapshot.provider === "yahoo-experimental" && instrument && snapshot.providerSymbol !== (instrument.yahooSymbol ?? `${snapshot.instrument.symbol}.NS`)) throw new MarketDataError("INSTRUMENT_METADATA_MISMATCH");
     if (!instrument) throw new MarketDataError("INSTRUMENT_NOT_IN_UNIVERSE");
     const identity = { instrumentId: instrument.id, provider: snapshot.provider, contentHash: hash };
     const quote = snapshot.quote;
@@ -93,9 +94,10 @@ export async function storeMarketSnapshot(db: PrismaClient, value: unknown) {
 export async function importMarketSnapshot(db: PrismaClient, provider: MarketDataProvider, instrument: MarketInstrument, days = 30, signal?: AbortSignal) {
   signal?.throwIfAborted();
   validateHistoryDays(days);
-  const symbol = nseProviderSymbol(instrument).slice(0, -3);
-  if (!await db.instrument.findFirst({ where: { exchange: instrument.exchange, symbol, active: true, inUniverse: true, kind: "equity" }, select: { id: true } })) throw new MarketDataError("INSTRUMENT_NOT_IN_UNIVERSE");
-  const snapshot = await provider.getSnapshot({ exchange: "NSE", symbol }, days, signal);
+  const symbol = instrument.symbol.trim().toUpperCase();
+  const stock = await db.instrument.findFirst({ where: { exchange: instrument.exchange, symbol, active: true, inUniverse: true }, select: { id: true, yahooSymbol: true } });
+  if (!stock) throw new MarketDataError("INSTRUMENT_NOT_IN_UNIVERSE");
+  const snapshot = await provider.getSnapshot({ exchange: "NSE", symbol, ...(provider.name === "yahoo-experimental" && stock.yahooSymbol ? { providerSymbol: stock.yahooSymbol } : {}) }, days, signal);
   signal?.throwIfAborted();
   if (snapshot.provider !== provider.name || snapshot.instrument.exchange !== "NSE" || snapshot.instrument.symbol !== symbol || snapshot.requestedCalendarDays !== days) throw new MarketDataError("PROVIDER_SNAPSHOT_MISMATCH");
   return storeMarketSnapshot(db, snapshot);

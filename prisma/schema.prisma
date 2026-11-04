@@ -155,6 +155,8 @@ model Instrument {
   name          String
   kind          InstrumentKind @default(equity)
   isin          String?
+  yahooSymbol   String? @map("yahoo_symbol")
+  bseCode       String? @map("bse_code")
   kiteToken     BigInt?        @map("kite_token")
   sector        String?
   benchmarkId   String?        @map("benchmark_id") @db.Uuid
@@ -615,4 +617,14 @@ model ResearchFollowUp {
   @@unique([analysisId, horizonSessions, methodologyVersion], map: "followup_analysis_unique")
   @@index([status, updatedAt], map: "followup_pending_idx")
   @@map("research_followups")
+}
+
+model UniverseImport {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source String
+  effectiveDate DateTime @map("effective_date") @db.Date
+  importedAt DateTime @default(now()) @map("imported_at") @db.Timestamptz(6)
+  members Json @db.JsonB
+  contentHash String @unique @map("content_hash")
+  @@map("universe_imports")
 }

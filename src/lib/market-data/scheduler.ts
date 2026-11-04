@@ -2,7 +2,7 @@ import type { PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { CalendarError, getMarketDay, getMarketState, type MarketCalendar } from "../market/calendar";
 
-export const priceSymbolsSchema = z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).min(1).max(20).transform((symbols) => [...new Set(symbols)].sort());
+export const priceSymbolsSchema = z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(2000).transform((symbols) => [...new Set(symbols)].sort());
 export const priceJobSchema = z.object({
   symbol: z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/),
   days: z.number().int().min(1).max(365).default(7),
@@ -29,7 +29,9 @@ export function planPriceCollection(calendar: MarketCalendar, at = new Date()) {
   const slot = anchor + Math.floor((at.getTime() - anchor) / CADENCE_MS) * CADENCE_MS;
   return { status: "due" as const, mode, slotStart: new Date(slot).toISOString(), validUntil: new Date(slot + CADENCE_MS).toISOString() };
 }
-export async function schedulePriceCollection(db: PrismaClient, calendar: MarketCalendar, symbols: string[], days = 7, at = new Date()) {
+export async function schedulePriceCollection(db: PrismaClient, calendar: MarketCalendar, symbols: string[], days = 7, at = new Date(), batchSize = 20, intervalMs = 1000) {
+  z.number().int().min(1).max(100).parse(batchSize);
+  z.number().int().min(250).max(60000).parse(intervalMs);
   const selected = priceSymbolsSchema.parse(symbols);
   z.number().int().min(1).max(365).parse(days);
   const plan = planPriceCollection(calendar, at);
@@ -39,19 +41,26 @@ export async function schedulePriceCollection(db: PrismaClient, calendar: Market
       create: { source: "swing-scheduler", scope: "prices-v1" }, update: { lastAttemptAt: at },
     });
     await tx.$queryRaw`SELECT id FROM polling_checkpoints WHERE id = ${checkpoint.id}::uuid FOR UPDATE`;
-    const stocks = await tx.instrument.findMany({ where: { symbol: { in: selected }, exchange: "NSE", active: true, inUniverse: true, kind: "equity" }, select: { symbol: true } });
+    const stocks = await tx.instrument.findMany({ where: { ...(selected.length ? { symbol: { in: selected } } : {}), exchange: "NSE", active: true, inUniverse: true }, orderBy: { symbol: "asc" }, select: { symbol: true } });
     const outsideUniverse = selected.filter((symbol) => !stocks.some((stock) => stock.symbol === symbol));
     let enqueued = 0, busy = 0, alreadyScheduled = 0;
-    for (const { symbol } of stocks) {
+    const previous = checkpoint.cursor && typeof checkpoint.cursor === "object" && !Array.isArray(checkpoint.cursor) && typeof checkpoint.cursor.after === "string" ? checkpoint.cursor.after : "";
+    const ordered = [...stocks.filter((s) => s.symbol > previous), ...stocks.filter((s) => s.symbol <= previous)];
+    let after = previous;
+    // Persisted round-robin rotation bounds each slot without starving later symbols.
+    const capacity = Math.min(batchSize, Math.max(1, Math.floor((Date.parse(plan.validUntil) - at.getTime()) / intervalMs)));
+    for (const { symbol } of ordered) {
+      if (enqueued >= capacity) break;
+      after = symbol;
       const dedupeKey = `scheduled:prices:v1:${symbol}:${plan.slotStart}`;
       if (await tx.job.findUnique({ where: { dedupeKey }, select: { id: true } })) { alreadyScheduled++; continue; }
       if (await tx.job.findFirst({ where: { kind: "prices.collect", status: { in: ["pending", "retry", "running"] }, payload: { path: ["symbol"], equals: symbol } }, select: { id: true } })) { busy++; continue; }
-      await tx.job.create({ data: { kind: "prices.collect", dedupeKey, payload: { symbol, days, validUntil: plan.validUntil }, runAfter: at, maxAttempts: 3 } });
+      await tx.job.create({ data: { kind: "prices.collect", dedupeKey, payload: { symbol, days, validUntil: plan.validUntil }, runAfter: new Date(at.getTime() + enqueued * intervalMs), maxAttempts: 3 } });
       enqueued++;
     }
     await tx.pollingCheckpoint.update({ where: { id: checkpoint.id }, data: {
       lastAttemptAt: at, lastSuccessAt: at, lastErrorCode: null, updatedAt: at,
-      cursor: { slotStart: plan.slotStart, mode: plan.mode, enqueued, busy, outsideUniverse },
+      cursor: { slotStart: plan.slotStart, mode: plan.mode, enqueued, busy, outsideUniverse, after, totalEligible: stocks.length, batchSize, intervalMs },
     } });
     return { ...plan, enqueued, busy, alreadyScheduled, outsideUniverse };
   }, { timeout: 15000 });

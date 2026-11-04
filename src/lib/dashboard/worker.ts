@@ -4,7 +4,7 @@ const runtimeSchema = z.object({
   service: z.literal("swing-worker"), status: z.enum(["ok", "degraded"]),
   runtime: z.object({
     checks: z.object({ database: z.enum(["up", "down"]), jobs: z.enum(["up", "down"]), scheduler: z.enum(["up", "down", "disabled"]) }),
-    priceMonitoring: z.object({ enabled: z.boolean(), symbols: z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(20) }).optional(),
+    priceMonitoring: z.object({ enabled: z.boolean(), symbols: z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(2000) }).optional(),
     followUpsEnabled: z.boolean().optional(),
     lastJobPollAt: z.string().datetime().nullable(), lastSchedulerTickAt: z.string().datetime().nullable(),
   }),

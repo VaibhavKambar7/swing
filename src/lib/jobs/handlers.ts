@@ -19,7 +19,7 @@ import { reassessMorningWatchlist } from "../briefings/post-open";
 
 import { collectPrice } from "../market-data/collect";
 import { priceJobSchema } from "../market-data/scheduler";
-import { createYahooProvider } from "../market-data/yahoo";
+import { createMarketProvider } from "../market-data/registry";
 import { MarketDataError } from "../market-data/provider";
 
 import { followUpPayload, updateResearchFollowUps } from "../research/followups";
@@ -75,7 +75,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       const payload = priceJobSchema.safeParse(job.payload);
       if (!payload.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
       signal.throwIfAborted();
-      try { await collectPrice(db, createYahooProvider(), await loadMarketCalendar(), payload.data, signal); }
+      try { await collectPrice(db, createMarketProvider(), await loadMarketCalendar(), payload.data, signal); }
       catch (error) {
         if (error instanceof CalendarError) throw new JobError(error.code, true);
         if (error instanceof MarketDataError) {

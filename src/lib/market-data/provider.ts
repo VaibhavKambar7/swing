@@ -1,4 +1,4 @@
-export type MarketInstrument = { exchange: "NSE"; symbol: string };
+export type MarketInstrument = { exchange: "NSE"; symbol: string; providerSymbol?: string };
 export type MarketQuote = {
   price: string; currency: "INR"; marketTime: string; retrievedAt: string;
   ageSeconds: number; freshness: "recent" | "stale" | "clock_skew";
@@ -28,6 +28,10 @@ export class MarketDataError extends Error {
 export function nseProviderSymbol(instrument: MarketInstrument) {
   const symbol = instrument.symbol.trim().toUpperCase();
   if (instrument.exchange !== "NSE" || !/^[A-Z0-9][A-Z0-9&-]{0,29}$/.test(symbol)) throw new MarketDataError("UNSUPPORTED_INSTRUMENT");
+  if (instrument.providerSymbol) {
+    if (!/^[A-Za-z0-9^&._-]{1,100}$/.test(instrument.providerSymbol)) throw new MarketDataError("UNSUPPORTED_INSTRUMENT");
+    return instrument.providerSymbol;
+  }
   return `${symbol}.NS`;
 }
 

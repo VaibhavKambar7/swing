@@ -15,7 +15,8 @@ export async function collectPrice(db: PrismaClient, provider: MarketDataProvide
   try {
     const imported = await importMarketSnapshot(db, provider, { exchange: "NSE", symbol }, days, signal);
     signal.throwIfAborted();
-    const movement = await detectStoredMovement(db, calendar, { exchange: "NSE", symbol }, provider.name, clock());
+    const stock = await db.instrument.findFirst({ where: { exchange: "NSE", symbol }, select: { kind: true } });
+    const movement = stock?.kind === "index" ? { status: "skipped" as const, reason: "COMPARISON_INDEX" } : await detectStoredMovement(db, calendar, { exchange: "NSE", symbol }, provider.name, clock());
     signal.throwIfAborted();
     const now = clock();
     await db.pollingCheckpoint.update({ where: { source_scope: identity }, data: {
