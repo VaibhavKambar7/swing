@@ -1000,3 +1000,16 @@ static assets after a build; `ops:readiness` checks both services without changi
 state. Follow [native deployment](docs/operations/native-deployment.md) during the
 later validation phase. Nothing has been installed, started, migrated, backed up,
 or deployed by this coding subpart.
+
+## Explicit failed-job recovery — Part 8.5a
+
+Apply `20261104063000_job_retry_history`. Failed jobs in `/system` link to a detail
+page with safe status/error codes and the latest 20 manual retry requests. A retry
+requires a deliberate confirmation and can include a short note. It preserves
+previous failure counters/error/finish time in an audit row, then queues the same
+supported job with a fresh bounded attempt cycle. Raw payloads are not exposed.
+Concurrent/stale forms cannot reset running, successful, or subsequently changed
+jobs. Expired scheduled price slots cannot be replayed. Retrying can make provider
+calls or use AI according to the existing saved payload; it is never triggered
+by loading a diagnostic page. No jobs have been retried during implementation.
+Recovery validation and operational observation remain deferred.

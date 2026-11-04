@@ -389,6 +389,7 @@ model Job {
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
+  retryRequests JobRetryRequest[]
   signal Signal? @relation("jobs_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_signal_id_signals_id_fk")
   alert  Alert?  @relation("jobs_alert_id_alerts_id_fk", fields: [alertId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "jobs_alert_id_alerts_id_fk")
 
@@ -565,4 +566,20 @@ model ResearchFeedback {
   @@unique([ownerKey, dailyBriefingId, contentVersion], map: "research_feedback_briefing_unique")
   @@index([ownerKey, updatedAt], map: "research_feedback_updated_idx")
   @@map("research_feedback")
+}
+
+model JobRetryRequest {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId            String @map("job_id") @db.Uuid
+  ownerKey         String @map("owner_key")
+  previousAttempts Int @map("previous_attempts")
+  previousLimit    Int @map("previous_limit")
+  previousError    String? @map("previous_error")
+  previousFinishedAt DateTime @map("previous_finished_at") @db.Timestamptz(6)
+  requestedAt      DateTime @default(now()) @map("requested_at") @db.Timestamptz(6)
+  reason           String? @db.VarChar(500)
+  job              Job @relation(fields: [jobId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_retry_job_fk")
+
+  @@index([jobId, requestedAt], map: "job_retry_requested_idx")
+  @@map("job_retry_requests")
 }
