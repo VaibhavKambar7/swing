@@ -22,6 +22,8 @@ export type ResearchInput = {
   contentTruncated: boolean;
 };
 export type ResearchResult = {
+  provider?: string;
+  model?: string;
   assessment: ResearchAssessment;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -35,6 +37,7 @@ export type MovementResearchInput = {
   contentTruncated: boolean;
 };
 export type ResearchProvider = {
+  identities?: { name: string; model: string }[];
   name: string;
   model: string;
   analyze(input: ResearchInput | MovementResearchInput, signal?: AbortSignal): Promise<ResearchResult>;

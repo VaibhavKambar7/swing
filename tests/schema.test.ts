@@ -1132,3 +1132,19 @@ describe("historical universe provenance", () => {
     expect(await historicalBenchmark(db, instrument.id, new Date("2026-11-01T04:00:00Z"), new Date("2026-11-01T04:00:00Z"))).toMatchObject({ benchmarkId: null, mappingStatus: "historical_mapping_unavailable" });
   });
 });
+
+describe("fallback research attribution", () => {
+  it("persists the successful fallback provider and skips an identical completed routed request", async () => {
+    const { withFallback } = await import("../src/lib/research/provider");
+    await seedStarterUniverse(db);
+    await storeAnnouncements(db, [{ sourceId: "fallback-fixture", title: "TCS - Financial Results", url: "https://example.com/results", description: "Synthetic financial results", publishedAt: null }]);
+    await matchStoredAnnouncements(db); await filterStoredAnnouncements(db);
+    const primary = vi.fn<ResearchProvider["analyze"]>().mockRejectedValue(new ResearchError("provider_http_error", 429));
+    const fallback = vi.fn<ResearchProvider["analyze"]>().mockResolvedValue({ assessment: { classification: "WATCH", summary: "Synthetic", significance: "Read original", risks: ["Unverified"], uncertainties: ["Missing facts"], evidenceIds: ["announcement"] }, inputTokens: 10, outputTokens: 20 });
+    const provider = withFallback({ name: "groq", model: "primary-test", analyze: primary }, { name: "gemini", model: "fallback-test", analyze: fallback });
+    expect((await analyzeStoredAnnouncements(db, provider, 1)).analyzed).toBe(1);
+    expect(await db.feedResearch.findFirstOrThrow()).toMatchObject({ provider: "gemini", model: "fallback-test", inputTokens: 10 });
+    expect((await analyzeStoredAnnouncements(db, provider, 1)).attempted).toBe(0);
+    expect(primary).toHaveBeenCalledTimes(1); expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});

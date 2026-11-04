@@ -55,7 +55,7 @@ export async function analyzeStoredAnnouncements(db: PrismaClient, provider: Res
       const input = buildResearchInput(item);
       const hash = inputHash(input);
       const identity = { feedItemId: item.id, provider: provider.name, model: provider.model, promptVersion: RESEARCH_PROMPT_VERSION, inputHash: hash };
-      if (await db.feedResearch.findFirst({ where: identity, select: { id: true } })) {
+      if (await db.feedResearch.findFirst({ where: { ...identity, provider: undefined, model: undefined, OR: (provider.identities ?? [provider]).map((p) => ({ provider: p.name, model: p.model })) }, select: { id: true } })) {
         counts.skipped++;
         continue;
       }
@@ -71,7 +71,7 @@ export async function analyzeStoredAnnouncements(db: PrismaClient, provider: Res
           if (!current || inputHash(buildResearchInput(current)) !== hash) return false;
           const written = await tx.feedResearch.createMany({
             data: [{
-              ...identity, inputSnapshot: input, classification: assessment.classification,
+              ...identity, provider: result.provider ?? provider.name, model: result.model ?? provider.model, inputSnapshot: input, classification: assessment.classification,
               summary: assessment.summary, significance: assessment.significance,
               risks: assessment.risks, uncertainties: assessment.uncertainties,
               // URLs are supplied by Swing, never accepted from generated text.

@@ -5,7 +5,9 @@ COPY package.json package-lock.json ./
 COPY prisma ./prisma
 COPY prisma.config.ts ./
 COPY src/lib/config ./src/lib/config
-RUN npm ci
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    npm ci
 
 FROM dependencies AS build
 COPY . .

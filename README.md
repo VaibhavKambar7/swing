@@ -264,3 +264,14 @@ Turbopack helper ports, `npm run build -- --webpack` checks the production bundl
 with Next’s Webpack builder instead. Live feeds, prices, Gemini,
 calendar accuracy, real migrations, sustained runtime behavior, deployments and
 backup/restore drills still require your separate operational validation.
+
+### AI provider routing
+
+Set `RESEARCH_PROVIDER=groq`, `GROQ_API_KEY`, and optionally `GROQ_MODEL`
+(default `llama-3.3-70b-versatile`). `RESEARCH_FALLBACK_PROVIDER=gemini` uses
+`GEMINI_API_KEY`/`GEMINI_MODEL` if Groq fails or returns invalid output. Both use
+validated evidence IDs and the same conservative research contract. Cancellation
+never starts fallback. Stored provider/model and token usage identify the actual
+successful provider, and deduplication recognizes either configured provider.
+Set fallback to `none` to disable it. Without routing configuration, existing
+installations retain Gemini as their default provider.

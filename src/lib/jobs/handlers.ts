@@ -5,7 +5,7 @@ import { AnnouncementFeedError } from "../announcements/rss";
 import { matchStoredAnnouncements } from "../announcements/match";
 import { filterStoredAnnouncements } from "../announcements/filter";
 import { analyzeStoredAnnouncements } from "../research/analyze";
-import { createGeminiProvider } from "../research/gemini";
+import { createResearchProvider } from "../research/provider";
 import { ResearchError } from "../research/schema";
 import { JobError } from "./queue";
 import type { JobHandler, JobHandlers } from "./runner";
@@ -59,7 +59,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     try {
       await action("limit" in payload ? { limit: payload.limit } : {}, signal);
     } catch (error) {
-      if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
+      if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model", "missing_groq_api_key", "invalid_groq_model", "invalid_research_provider", "invalid_fallback_provider"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
       if (error instanceof AnnouncementFeedError && error.code === "invalid_url") throw new JobError("FEED_CONFIGURATION_REQUIRED", true);
       throw error;
     }
@@ -69,7 +69,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     "announcements.research-item": async (job, signal) => {
       const { feedItemId } = itemResearchPayload.parse(job.payload);
       let provider;
-      try { provider = createGeminiProvider(); }
+      try { provider = createResearchProvider(); }
       catch { throw new JobError("AI_CONFIGURATION_REQUIRED", true); }
       const result = await analyzeStoredAnnouncements(db, provider, 1, signal, feedItemId);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
@@ -111,9 +111,9 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
       signal.throwIfAborted();
       try {
-        await researchMovement(db, result.data.signalId, result.data.analyze ? createGeminiProvider() : undefined, new Date(), signal);
+        await researchMovement(db, result.data.signalId, result.data.analyze ? createResearchProvider() : undefined, new Date(), signal);
       } catch (error) {
-        if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
+        if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model", "missing_groq_api_key", "invalid_groq_model", "invalid_research_provider", "invalid_fallback_provider"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
         if (error instanceof ResearchError && ["movement_unavailable", "movement_sources_missing", "movement_sources_mismatch", "invalid_movement_request"].includes(error.code)) throw new JobError("MOVEMENT_CONTEXT_UNAVAILABLE", true);
         throw error;
       }
@@ -132,7 +132,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     "announcements.match": wrap("announcements.match", () => matchStoredAnnouncements(db)),
     "announcements.filter": wrap("announcements.filter", () => filterStoredAnnouncements(db)),
     "announcements.analyze": wrap("announcements.analyze", async (payload, signal) => {
-      const result = await analyzeStoredAnnouncements(db, createGeminiProvider(), payload.limit, signal);
+      const result = await analyzeStoredAnnouncements(db, createResearchProvider(), payload.limit, signal);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
     }),
   };

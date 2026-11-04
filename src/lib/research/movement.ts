@@ -72,13 +72,15 @@ export async function researchMovement(db: PrismaClient, signalId: string, provi
   if (!provider) return { status: "linked", signalId, evidenceCount: selected.length, evidenceInserted: linked.count, catalystVerified: false };
   const hash = fingerprint(input);
   const identity = { signalId, provider: provider.name, model: provider.model, promptVersion: MOVEMENT_RESEARCH_VERSION, inputHash: hash };
-  const prior = await db.analysis.findFirst({ where: identity, select: { id: true } });
+  const prior = await db.analysis.findFirst({ where: { ...identity, provider: undefined, model: undefined, OR: (provider.identities ?? [provider]).map((p) => ({ provider: p.name, model: p.model })) }, select: { id: true } });
   if (prior) return { status: "duplicate", signalId, analysisId: prior.id, evidenceCount: selected.length, catalystVerified: false };
   const result = await provider.analyze(input, abort);
   abort?.throwIfAborted();
   const checked = researchSchemaFor(input.evidence.map((entry) => entry.id), "movement").safeParse(result.assessment);
   if (!checked.success) throw new ResearchError("invalid_movement_research");
   const assessment = checked.data;
+  identity.provider = result.provider ?? provider.name;
+  identity.model = result.model ?? provider.model;
   if (fingerprint((await movementInput(db, signalId, at)).input) !== hash) throw new ResearchError("movement_context_changed");
   const inserted = await db.$transaction(async (tx) => {
     const stillEligible = await tx.signal.findFirst({ where: { id: signalId, origin: "movement", instrument: { active: true, inUniverse: true } } });
