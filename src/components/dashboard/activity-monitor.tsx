@@ -51,7 +51,7 @@ export function ActivityMonitor() {
         setActivity(data); setConnection("up"); failures = 0;
         if (changed) {
           setHasUpdates(true);
-          const listPage = ["/", "/alerts", "/inbox", "/briefings", "/feedback"].includes(path);
+          const listPage = ["/", "/alerts", "/inbox", "/briefings", "/feedback", "/outcomes"].includes(path);
           if (listPage && !dirty.current && !document.activeElement?.closest("form")) {
             start(() => router.refresh()); setHasUpdates(false);
           }

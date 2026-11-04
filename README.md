@@ -1013,3 +1013,27 @@ jobs. Expired scheduled price slots cannot be replayed. Retrying can make provid
 calls or use AI according to the existing saved payload; it is never triggered
 by loading a diagnostic page. No jobs have been retried during implementation.
 Recovery validation and operational observation remain deferred.
+
+## Observational research follow-ups
+
+Apply `20261104064000_research_followups`. `npm run research:followups` processes
+a bounded batch using only stored observations and the maintained calendar.
+`WORKER_FOLLOWUPS_ENABLED=true` opts the master scheduler into hourly batches.
+`/outcomes` shows pending, observed, and unavailable follow-ups for Investigate /
+Watch research versions at 1, 5 and 20 later trading-session closes.
+
+Method `first-observation-to-future-session-close-v1` uses the first eligible quote
+recorded/retrieved within 15 minutes after publication during a session, or after
+the next session opens. Reference selection is frozen; later historical imports
+cannot create a missing contemporaneous baseline. Later quotes must be captured
+in the final 15 minutes of the target date's final session and recorded/retrieved
+by five minutes after close. Provider, provider symbol and currency must match;
+quote ages must be nonnegative and at most five minutes. Calendar gaps remain
+pending. Missing observation windows become unavailable rather than zero returns.
+Measured records are preserved; methodology changes require a new version.
+
+These provider-native changes have unverified price basis/distribution delay.
+Corporate actions, fees, trade execution, dividends and benchmarks are absent;
+this is not verified investment performance or evidence of causal prediction.
+Follow-up jobs do not fetch prices, run AI, or send external notifications. Code,
+migrations, and measurement behavior remain untested during this coding phase.

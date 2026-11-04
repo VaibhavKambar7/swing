@@ -7,7 +7,7 @@ const collections = [
   ["feed_items", "greatest(discovered_at, match_checked_at, relevance_checked_at)"], ["feed_research", "created_at"], ["signals", "created_at"],
   ["analyses", "created_at"], ["daily_briefings", "generated_at"], ["post_open_assessments", "assessed_at"],
   ["read_states", "read_at"], ["workspace_preferences", "updated_at"], ["watchlist_entries", "created_at"],
-  ["research_feedback", "updated_at"], ["instruments", "updated_at"],
+  ["research_feedback", "updated_at"], ["research_followups", "updated_at"], ["instruments", "updated_at"],
 ] as const;
 export async function getWorkspaceActivity(db: PrismaClient) {
   const [summaries, alerts] = await Promise.all([

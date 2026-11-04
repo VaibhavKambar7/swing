@@ -21,6 +21,7 @@ const envSchema = z.object({
   WORKER_SCHEDULER_AI_LIMIT: z.coerce.number().int().min(1).max(20).default(1),
   WORKER_MORNING_BRIEFING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_CLOSING_BRIEFING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  WORKER_FOLLOWUPS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_PRICES_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_PRICE_SYMBOLS: z.string().default("").transform((value) => value.split(",").map((v) => v.trim().toUpperCase()).filter(Boolean))
     .pipe(z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(20)).transform((value) => [...new Set(value)]),

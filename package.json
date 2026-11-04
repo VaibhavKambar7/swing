@@ -38,7 +38,8 @@
     "db:backup": "tsx scripts/backup-db.ts",
     "db:restore": "tsx scripts/restore-db.ts",
     "ops:prepare-release": "tsx scripts/prepare-release.ts",
-    "ops:readiness": "node --use-env-proxy --import tsx scripts/check-readiness.ts"
+    "ops:readiness": "node --use-env-proxy --import tsx scripts/check-readiness.ts",
+    "research:followups": "tsx scripts/research-followups.ts"
   },
   "dependencies": {
     "@next/env": "^16.4.3",

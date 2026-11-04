@@ -140,6 +140,7 @@ model FeedResearch {
   inputTokens   Int?           @map("input_tokens")
   outputTokens  Int?           @map("output_tokens")
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  followUps     ResearchFollowUp[]
   feedItem      FeedItem       @relation(fields: [feedItemId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "feed_research_item_fk")
 
   @@unique([feedItemId, provider, model, promptVersion, inputHash], map: "feed_research_input_unique")
@@ -201,6 +202,8 @@ model MarketSnapshotRecord {
   recordedAt       DateTime  @default(now()) @map("recorded_at") @db.Timestamptz(6)
   instrument       Instrument @relation(fields: [instrumentId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "market_snapshots_instrument_fk")
   candles          MarketCandleRecord[]
+  referenceFollowUps ResearchFollowUp[] @relation("followup_reference")
+  observedFollowUps ResearchFollowUp[] @relation("followup_observed")
 
   @@unique([instrumentId, provider, contentHash], map: "market_snapshots_content_unique")
   @@index([instrumentId, provider, retrievedAt], map: "market_snapshots_observed_idx")
@@ -320,6 +323,7 @@ model Analysis {
   costInr          Decimal? @map("cost_inr") @db.Decimal(14, 6)
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  followUps ResearchFollowUp[]
   alerts Alert[] @relation("alerts_analysis_signal_fk")
   signal Signal  @relation("analyses_signal_id_signals_id_fk", fields: [signalId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "analyses_signal_id_signals_id_fk")
 
@@ -582,4 +586,33 @@ model JobRetryRequest {
 
   @@index([jobId, requestedAt], map: "job_retry_requested_idx")
   @@map("job_retry_requests")
+}
+
+model ResearchFollowUp {
+  id                  String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedResearchId      String? @map("feed_research_id") @db.Uuid
+  analysisId          String? @map("analysis_id") @db.Uuid
+  horizonSessions     Int @map("horizon_sessions")
+  methodologyVersion  String @map("methodology_version")
+  status              String @default("pending")
+  reason              String @default("AWAITING_REFERENCE")
+  referenceSnapshotId String? @map("reference_snapshot_id") @db.Uuid
+  observedSnapshotId  String? @map("observed_snapshot_id") @db.Uuid
+  dueAt               DateTime? @map("due_at") @db.Timestamptz(6)
+  referenceAt         DateTime? @map("reference_at") @db.Timestamptz(6)
+  observedAt          DateTime? @map("observed_at") @db.Timestamptz(6)
+  referencePrice      Decimal? @map("reference_price") @db.Decimal(38,18)
+  observedPrice       Decimal? @map("observed_price") @db.Decimal(38,18)
+  changePct           Decimal? @map("change_pct") @db.Decimal(18,8)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  feedResearch        FeedResearch? @relation(fields: [feedResearchId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "followup_research_fk")
+  analysis            Analysis? @relation(fields: [analysisId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "followup_analysis_fk")
+  referenceSnapshot   MarketSnapshotRecord? @relation("followup_reference", fields: [referenceSnapshotId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "followup_reference_fk")
+  observedSnapshot    MarketSnapshotRecord? @relation("followup_observed", fields: [observedSnapshotId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "followup_observed_fk")
+
+  @@unique([feedResearchId, horizonSessions, methodologyVersion], map: "followup_research_unique")
+  @@unique([analysisId, horizonSessions, methodologyVersion], map: "followup_analysis_unique")
+  @@index([status, updatedAt], map: "followup_pending_idx")
+  @@map("research_followups")
 }
