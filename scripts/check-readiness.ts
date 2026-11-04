@@ -5,7 +5,7 @@ async function check(service: "swing-web" | "swing-worker", value: string, path:
   const parsed = base.safeParse(value);
   if (!parsed.success) return { service, ready: false, code: "INVALID_HEALTH_URL" };
   try {
-    const response = await fetch(new URL(path, parsed.data), { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(5000) });
+    const response = await fetch(new URL(path, parsed.data), { headers: { Authorization: service === "swing-web" ? `Basic ${Buffer.from(`${process.env.SWING_AUTH_USER ?? ""}:${process.env.SWING_AUTH_PASSWORD ?? ""}`).toString("base64")}` : `Bearer ${process.env.WORKER_ACCESS_TOKEN ?? ""}` }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(5000) });
     const checks = service === "swing-web"
       ? z.object({ database: z.literal("up"), worker: z.literal("up") })
       : z.object({ database: z.literal("up"), jobs: z.literal("up"), scheduler: z.enum(["up", "disabled"]) });

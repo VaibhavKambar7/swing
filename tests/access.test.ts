@@ -1,0 +1,15 @@
+import { describe, it, expect } from "vitest";
+import { authorize, workerAuthorized } from "../src/lib/auth/access";
+describe("personal access", () => {
+  const env = { SWING_AUTH_USER: "owner", SWING_AUTH_PASSWORD: "a".repeat(32), WORKER_ACCESS_TOKEN: "b".repeat(32) };
+  it("fails closed without configuration or invalid credentials", () => {
+    expect(authorize(null, env)).toBe(false);
+    expect(authorize("Basic " + Buffer.from("owner:wrong").toString("base64"), env)).toBe(false);
+    expect(authorize("Basic x", {})).toBe(false);
+  });
+  it("validates both web credentials and separate worker bearer", () => {
+    expect(authorize("Basic " + Buffer.from(`owner:${env.SWING_AUTH_PASSWORD}`).toString("base64"), env)).toBe(true);
+    expect(workerAuthorized(`Bearer ${env.WORKER_ACCESS_TOKEN}`, env)).toBe(true);
+    expect(workerAuthorized(undefined, env)).toBe(false);
+  });
+});

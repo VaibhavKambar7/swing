@@ -1053,3 +1053,15 @@ label the web configuration as a fallback rather than assuming the worker shares
 it. Configured symbols outside active coverage are listed separately. These are
 read-only stored-data diagnostics; no provider requests or recovery actions run
 when the page opens. Validation remains deferred.
+
+## Personal access control
+
+All web paths, APIs and server actions require HTTP Basic authentication. Set
+`SWING_AUTH_USER` and a random `SWING_AUTH_PASSWORD` of at least 24 characters.
+Missing configuration fails closed, including development. Use HTTPS when hosted;
+your browser prompts for credentials. Close the browser session to clear cached
+Basic credentials. This is a single-owner workspace, not multi-user accounts.
+Set `SWING_PUBLIC_ORIGIN` to the exact browser origin for mutation origin checks.
+Worker health and diagnostics require an independent `WORKER_ACCESS_TOKEN` of at
+least 32 characters, shared by web and worker. Readiness tooling sends these
+credentials in headers. Loopback binding is additional isolation, not sign-in.

@@ -1,3 +1,4 @@
+import { workerAuthorized } from "../lib/auth/access";
 import "../lib/config/load-env";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -126,6 +127,7 @@ function scheduleHeartbeat() {
 }
 
 const server = createServer((request, response) => {
+  if (!workerAuthorized(request.headers.authorization)) { response.writeHead(401).end(); return; }
   response.setHeader("Content-Type", "application/json");
   response.setHeader("Cache-Control", "no-store");
   if (request.method !== "GET") {
