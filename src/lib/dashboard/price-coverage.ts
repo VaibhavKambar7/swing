@@ -29,3 +29,11 @@ export async function getPriceCoverage(db: PrismaClient, selected: string[], at 
   const coveredSelections = await db.instrument.findMany({ where: { exchange: "NSE", active: true, inUniverse: true, symbol: { in: selected } }, select: { symbol: true } });
   return { rows, total, omitted: Math.max(0, total - (page - 1) * 100 - rows.length), selectedOutsideCoverage: selected.filter((symbol) => !coveredSelections.some((stock) => stock.symbol === symbol)), at };
 }
+
+// A slot-budget estimate, not an observed service-level guarantee. Latency,
+// worker queueing and provider cooldowns can only make a sweep slower.
+export function plannedSweepMinutes(instruments: number, batchSize: number, slotMs: number, intervalMs: number): number | null {
+  if (![instruments, batchSize, slotMs, intervalMs].every((n) => Number.isFinite(n) && n > 0)) return null;
+  const capacity = Math.min(Math.floor(batchSize), Math.floor(slotMs / intervalMs));
+  return capacity > 0 ? Math.ceil(instruments / capacity) * slotMs / 60000 : null;
+}

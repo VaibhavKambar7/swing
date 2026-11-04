@@ -4,7 +4,7 @@ import { collectEnabledSources } from "../announcements/sources";
 import { matchStoredAnnouncements } from "../announcements/match";
 import { filterStoredAnnouncements } from "../announcements/filter";
 import { analyzeStoredAnnouncements } from "../research/analyze";
-import { createResearchProvider } from "../research/provider";
+import { createBudgetedResearchProvider } from "../research/provider";
 import { ResearchError } from "../research/schema";
 import { JobError } from "./queue";
 
@@ -13,7 +13,7 @@ export function createPipelineStages(db: PrismaClient): PipelineStages {
     fetch: async (signal?: AbortSignal) => collectEnabledSources(db, signal),
     match: () => matchStoredAnnouncements(db),
     filter: () => filterStoredAnnouncements(db),
-    analyze: (limit: number, signal?: AbortSignal) => analyzeStoredAnnouncements(db, createResearchProvider(), limit, signal),
+    analyze: (limit: number, signal?: AbortSignal) => analyzeStoredAnnouncements(db, createBudgetedResearchProvider(db), limit, signal),
   };
 }
 export type PipelineStages = {

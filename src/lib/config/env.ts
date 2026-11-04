@@ -18,6 +18,8 @@ const envSchema = z.object({
   WORKER_SCHEDULER_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   WORKER_SCHEDULER_AI_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  AI_DAILY_ASSESSMENT_LIMIT: z.coerce.number().int().min(0).max(10000).default(10),
+  AI_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(20000).default(20),
   WORKER_SCHEDULER_AI_LIMIT: z.coerce.number().int().min(1).max(20).default(1),
   WORKER_MORNING_BRIEFING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   WORKER_CLOSING_BRIEFING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),

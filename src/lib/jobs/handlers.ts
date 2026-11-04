@@ -1,3 +1,4 @@
+import { ResearchAllowanceError } from "../research/allowance";
 import { collectSource } from "../announcements/sources";
 import { z } from "zod";
 import type { PrismaClient } from "../../generated/prisma/client";
@@ -5,7 +6,7 @@ import { AnnouncementFeedError } from "../announcements/rss";
 import { matchStoredAnnouncements } from "../announcements/match";
 import { filterStoredAnnouncements } from "../announcements/filter";
 import { analyzeStoredAnnouncements } from "../research/analyze";
-import { createResearchProvider } from "../research/provider";
+import { createBudgetedResearchProvider } from "../research/provider";
 import { ResearchError } from "../research/schema";
 import { JobError } from "./queue";
 import type { JobHandler, JobHandlers } from "./runner";
@@ -69,10 +70,11 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     "announcements.research-item": async (job, signal) => {
       const { feedItemId } = itemResearchPayload.parse(job.payload);
       let provider;
-      try { provider = createResearchProvider(); }
+      try { provider = createBudgetedResearchProvider(db); }
       catch { throw new JobError("AI_CONFIGURATION_REQUIRED", true); }
       const result = await analyzeStoredAnnouncements(db, provider, 1, signal, feedItemId);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
+      if ("deferred" in result && result.deferred) return;
       if (!result.analyzed && !result.skipped) throw new JobError("RESEARCH_ITEM_NOT_ELIGIBLE", true);
     },
     "sources.collect": async (job, signal) => {
@@ -111,8 +113,9 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
       if (!result.success) throw new JobError("INVALID_JOB_PAYLOAD", true);
       signal.throwIfAborted();
       try {
-        await researchMovement(db, result.data.signalId, result.data.analyze ? createResearchProvider() : undefined, new Date(), signal);
+        await researchMovement(db, result.data.signalId, result.data.analyze ? createBudgetedResearchProvider(db) : undefined, new Date(), signal);
       } catch (error) {
+        if (error instanceof ResearchAllowanceError) return;
         if (error instanceof ResearchError && ["missing_gemini_api_key", "invalid_gemini_model", "missing_groq_api_key", "invalid_groq_model", "invalid_research_provider", "invalid_fallback_provider"].includes(error.code)) throw new JobError("AI_CONFIGURATION_REQUIRED", true);
         if (error instanceof ResearchError && ["movement_unavailable", "movement_sources_missing", "movement_sources_mismatch", "invalid_movement_request"].includes(error.code)) throw new JobError("MOVEMENT_CONTEXT_UNAVAILABLE", true);
         throw error;
@@ -132,7 +135,7 @@ export function createJobHandlers(db: PrismaClient, stages: PipelineStages = cre
     "announcements.match": wrap("announcements.match", () => matchStoredAnnouncements(db)),
     "announcements.filter": wrap("announcements.filter", () => filterStoredAnnouncements(db)),
     "announcements.analyze": wrap("announcements.analyze", async (payload, signal) => {
-      const result = await analyzeStoredAnnouncements(db, createResearchProvider(), payload.limit, signal);
+      const result = await analyzeStoredAnnouncements(db, createBudgetedResearchProvider(db), payload.limit, signal);
       if (result.failed) throw new JobError("RESEARCH_ITEMS_FAILED");
     }),
   };

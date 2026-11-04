@@ -275,3 +275,35 @@ never starts fallback. Stored provider/model and token usage identify the actual
 successful provider, and deduplication recognizes either configured provider.
 Set fallback to `none` to disable it. Without routing configuration, existing
 installations retain Gemini as their default provider.
+
+## Daily AI allowance
+
+Apply `20261105030000_research_allowance` before enabling AI. All application AI
+entry points share durable IST-day reservations, including CLI/manual requests,
+automatic announcement pipelines, movement analysis, retries, and each fallback
+provider call. Defaults are `AI_DAILY_ASSESSMENT_LIMIT=10` validated responses and
+`AI_DAILY_ATTEMPT_LIMIT=20` reserved provider attempts. A validated response consumes
+allowance even if changed source data, cancellation or a later database error
+prevents assessment storage. Failed/cancelled calls consume attempts. This bounds
+request counts, not money, tokens, or provider-side billing.
+
+Reservations serialize across workers and survive restarts. In-flight requests
+reserve remaining response capacity; a crashed request stays counted until the
+next IST day, rather than reopening uncertain budget. A zero limit stops requests.
+The server database clock defines the reservation day. Limits reset at midnight
+IST; no worker restart or destructive reset is necessary. Failures to read/write
+usage fail closed. Fallback never bypasses an exhausted allowance.
+
+At exhaustion, announcement collection/matching/filtering continue while AI is
+deferred; budget exhaustion is not a provider-failure retry loop. Fresh dated
+announcements are considered before older backlog, with undated items last.
+`/settings` and `/system` show the daily limits, successful responses, reservations,
+failed attempts, and remaining capacity. Reading these panels makes no AI calls.
+
+For Nifty 500 collection, leave `WORKER_PRICE_SYMBOLS` empty so all imported active
+equities and mapped indexes participate in rotation. Full membership does not
+establish frequent quote coverage: 50 requests per 60-second slot over 511
+instruments plans at least 11 slots per sweep, before latency, queue delays,
+rate limits or missed slots. That cadence does not meet the existing movement
+detector’s 5–6 minute reference requirement. A suitable feed/capacity and a live
+session validation are still needed for reliable full-universe movement alerts.

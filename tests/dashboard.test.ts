@@ -1,3 +1,4 @@
+import { plannedSweepMinutes } from "../src/lib/dashboard/price-coverage";
 import { describe, expect, it, vi } from "vitest";
 import { collectionState, inboxFiltersSchema, loadRead, safeSourceUrl, stringList } from "../src/lib/dashboard/queries";
 import { readWorkerStatus } from "../src/lib/dashboard/worker";
@@ -32,5 +33,18 @@ describe("dashboard safety and honest state", () => {
     expect((await readWorkerStatus("http://127.0.0.1:3001", fetcher)).state).toBe("unavailable");
     fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ service: "another-app", status: "ok" })));
     expect((await readWorkerStatus("http://127.0.0.1:3001", fetcher)).state).toBe("unavailable");
+  });
+});
+
+
+describe("full-universe collection estimates", () => {
+  it("includes slot budget and request spacing instead of promising five-minute coverage", () => {
+    expect(plannedSweepMinutes(511, 50, 60000, 1000)).toBe(11);
+    expect(plannedSweepMinutes(500, 100, 60000, 1000)).toBe(9);
+    expect(plannedSweepMinutes(511, 20, 300000, 1000)).toBe(130);
+  });
+  it("does not invent a cadence for invalid or zero-capacity configuration", () => {
+    expect(plannedSweepMinutes(0, 50, 60000, 1000)).toBeNull();
+    expect(plannedSweepMinutes(500, 50, 1000, 2000)).toBeNull();
   });
 });

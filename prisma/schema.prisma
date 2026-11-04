@@ -641,3 +641,18 @@ model FeedSource {
  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
  @@map("feed_sources")
 }
+
+// Durable reservations bound AI use across processes, models, and restarts.
+model ResearchAllowanceUse {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  day         DateTime @db.Date
+  provider    String
+  model       String
+  status      String @default("pending")
+  errorCode   String? @map("error_code")
+  startedAt   DateTime @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  @@index([day, status], map: "research_allowance_day_idx")
+  @@map("research_allowance_uses")
+}

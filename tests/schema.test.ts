@@ -1,3 +1,5 @@
+import { getDailyAllowance, reserveAiRequest, withDailyAllowance } from "../src/lib/research/allowance";
+import { withFallback } from "../src/lib/research/provider";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -59,7 +61,7 @@ afterAll(async () => {
   await engine?.close();
 });
 beforeEach(async () => {
-  await db.$executeRaw`TRUNCATE universe_imports, daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
+  await db.$executeRaw`TRUNCATE research_allowance_uses, universe_imports, daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
     analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback,
     performance_outcomes CASCADE`;
 });
@@ -1146,5 +1148,64 @@ describe("fallback research attribution", () => {
     expect(await db.feedResearch.findFirstOrThrow()).toMatchObject({ provider: "gemini", model: "fallback-test", inputTokens: 10 });
     expect((await analyzeStoredAnnouncements(db, provider, 1)).attempted).toBe(0);
     expect(primary).toHaveBeenCalledTimes(1); expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("durable daily AI allowance", () => {
+  const input = { stock: { exchange: "NSE", symbol: "TEST", name: "Synthetic" }, announcement: { title: "Synthetic disclosure", description: null, url: "https://example.com/test", publishedAt: null, discoveredAt: "2026-11-05T00:00:00Z" }, relevance: { status: "review", reason: null, ruleVersion: "test" }, contentTruncated: false };
+  const result = { assessment: { classification: "WATCH" as const, summary: "Fixture only", significance: "Unknown", risks: ["Unknown"], uncertainties: ["Unverified"], evidenceIds: ["announcement"] }, inputTokens: 1, outputTokens: 1 };
+  function provider(analyze = vi.fn<ResearchProvider["analyze"]>().mockResolvedValue(result)): ResearchProvider {
+    return { name: "fixture", model: "fixture-model", analyze };
+  }
+  it("bounds concurrent requests using durable reservations", async () => {
+    const analyze = vi.fn<ResearchProvider["analyze"]>().mockResolvedValue(result);
+    const limits = { assessments: 3, attempts: 20 };
+    const limited = withDailyAllowance(db, provider(analyze), limits);
+    const responses = await Promise.allSettled(Array.from({ length: 12 }, () => limited.analyze(input)));
+    expect(responses.filter((r) => r.status === "fulfilled")).toHaveLength(3);
+    expect(analyze).toHaveBeenCalledTimes(3);
+    expect(await getDailyAllowance(db, limits)).toMatchObject({ success: 3, pending: 0, failed: 0, attempts: 3, remaining: 0 });
+  });
+  it("counts failed attempts without consuming all successful-response capacity", async () => {
+    const analyze = vi.fn<ResearchProvider["analyze"]>().mockRejectedValueOnce(new ResearchError("provider_http_error", 503)).mockResolvedValue(result);
+    const limits = { assessments: 1, attempts: 3 };
+    const limited = withDailyAllowance(db, provider(analyze), limits);
+    await expect(limited.analyze(input)).rejects.toMatchObject({ code: "provider_http_error" });
+    await expect(limited.analyze(input)).resolves.toMatchObject(result);
+    await expect(limited.analyze(input)).rejects.toMatchObject({ code: "daily_ai_assessment_limit" });
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(await getDailyAllowance(db, limits)).toMatchObject({ success: 1, failed: 1, attempts: 2, remaining: 0 });
+  });
+  it("does not let fallback bypass the shared attempt limit", async () => {
+    const primary = vi.fn<ResearchProvider["analyze"]>().mockRejectedValue(new ResearchError("provider_http_error", 429));
+    const fallback = vi.fn<ResearchProvider["analyze"]>().mockResolvedValue(result);
+    const limits = { assessments: 2, attempts: 1 };
+    const limited = withFallback(withDailyAllowance(db, provider(primary), limits), withDailyAllowance(db, { ...provider(fallback), name: "fallback" }, limits));
+    await expect(limited.analyze(input)).rejects.toMatchObject({ code: "daily_ai_attempt_limit" });
+    expect(primary).toHaveBeenCalledTimes(1);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(await getDailyAllowance(db, limits)).toMatchObject({ success: 0, failed: 1, attempts: 1 });
+  });
+  it("keeps uncertain crash reservations counted and scopes them to their IST day", async () => {
+    const limits = { assessments: 1, attempts: 2 };
+    const held = await reserveAiRequest(db, "fixture", "fixture-model", limits);
+    await expect(reserveAiRequest(db, "fixture", "fixture-model", limits)).rejects.toMatchObject({ code: "daily_ai_assessment_limit" });
+    const usage = await getDailyAllowance(db, limits);
+    expect(usage).toMatchObject({ success: 0, pending: 1, remaining: 0 });
+    const yesterday = new Date(Date.parse(`${usage.day}T00:00:00Z`) - 86400000);
+    await db.researchAllowanceUse.update({ where: { id: held.id }, data: { day: yesterday } });
+    expect(await getDailyAllowance(db, limits)).toMatchObject({ pending: 0, attempts: 0, remaining: 1 });
+    await expect(reserveAiRequest(db, "fixture", "fixture-model", limits)).resolves.toHaveProperty("id");
+  });
+  it("defers announcement AI at zero allowance while retaining the source", async () => {
+    const instrument = await db.instrument.create({ data: { exchange: "NSE", symbol: "BUDGET", name: "Budget Fixture", inUniverse: true } });
+    await db.feedItem.create({ data: { source: NSE_SOURCE, sourceId: "budget-deferred", title: "Budget Fixture - Results", url: "https://example.com/budget", instrumentId: instrument.id, matchStatus: "matched", matchCheckedAt: new Date(), relevanceStatus: "review", relevanceReason: "fixture", relevanceRuleVersion: RELEVANCE_RULE_VERSION, relevanceCheckedAt: new Date() } });
+    const analyze = vi.fn<ResearchProvider["analyze"]>().mockResolvedValue(result);
+    const limited = withDailyAllowance(db, provider(analyze), { assessments: 0, attempts: 0 });
+    expect(await analyzeStoredAnnouncements(db, limited, 1)).toMatchObject({ analyzed: 0, failed: 0, attempted: 0, deferred: true, allowanceReason: "daily_ai_attempt_limit" });
+    expect(analyze).not.toHaveBeenCalled();
+    expect(await db.feedItem.count()).toBe(1);
+    expect(await db.researchAllowanceUse.count()).toBe(0);
   });
 });
