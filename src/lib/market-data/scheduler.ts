@@ -1,6 +1,7 @@
 import type { PrismaClient } from "../../generated/prisma/client";
 import { z } from "zod";
 import { CalendarError, getMarketDay, getMarketState, type MarketCalendar } from "../market/calendar";
+import { WORKSPACE_OWNER } from "../dashboard/read-state";
 
 export const priceSymbolsSchema = z.array(z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,29}$/)).max(2000).transform((symbols) => [...new Set(symbols)].sort());
 export const priceJobSchema = z.object({
@@ -45,6 +46,11 @@ export async function schedulePriceCollection(db: PrismaClient, calendar: Market
     const cursor = checkpoint.cursor && typeof checkpoint.cursor === "object" && !Array.isArray(checkpoint.cursor) ? checkpoint.cursor : {};
     if (cursor.slotStart === plan.slotStart) return { ...plan, enqueued: 0, busy: 0, alreadyScheduled: 1, outsideUniverse: [] as string[] };
     const stocks = await tx.instrument.findMany({ where: { ...(selected.length ? { symbol: { in: selected } } : {}), exchange: "NSE", active: true, inUniverse: true }, orderBy: { symbol: "asc" }, select: { symbol: true } });
+    const watchlist = selected.length ? [] : await tx.watchlistEntry.findMany({
+      where: { ownerKey: WORKSPACE_OWNER, instrument: { exchange: "NSE", active: true, inUniverse: true } },
+      select: { instrument: { select: { symbol: true } } },
+    });
+    const priority = new Set(watchlist.map((entry) => entry.instrument.symbol));
     const outsideUniverse = selected.filter((symbol) => !stocks.some((stock) => stock.symbol === symbol));
     const queued = await tx.job.findMany({ where: { kind: "prices.collect", status: { in: ["pending", "retry", "running"] } }, select: { payload: true } });
     const busySymbols = new Set(queued.map((j) => j.payload && typeof j.payload === "object" && !Array.isArray(j.payload) ? j.payload.symbol : null));
@@ -53,13 +59,16 @@ export async function schedulePriceCollection(db: PrismaClient, calendar: Market
     const pending: { kind: string; dedupeKey: string; payload: { symbol: string; days: number; validUntil: string }; runAfter: Date; maxAttempts: number }[] = [];
     let enqueued = 0, busy = 0, alreadyScheduled = 0;
     const previous = checkpoint.cursor && typeof checkpoint.cursor === "object" && !Array.isArray(checkpoint.cursor) && typeof checkpoint.cursor.after === "string" ? checkpoint.cursor.after : "";
-    const ordered = [...stocks.filter((s) => s.symbol > previous), ...stocks.filter((s) => s.symbol <= previous)];
+    const previousPriority = checkpoint.cursor && typeof checkpoint.cursor === "object" && !Array.isArray(checkpoint.cursor) && typeof checkpoint.cursor.priorityAfter === "string" ? checkpoint.cursor.priorityAfter : "";
+    const rotate = (rows: typeof stocks, after: string) => [...rows.filter((s) => s.symbol > after), ...rows.filter((s) => s.symbol <= after)];
+    const ordered = [...rotate(stocks.filter((s) => priority.has(s.symbol)), previousPriority), ...rotate(stocks.filter((s) => !priority.has(s.symbol)), previous)];
     let after = previous;
+    let priorityAfter = previousPriority;
     // Persisted round-robin rotation bounds each slot without starving later symbols.
     const capacity = Math.min(batchSize, Math.max(1, Math.floor((Date.parse(plan.validUntil) - at.getTime()) / intervalMs)));
     for (const { symbol } of ordered) {
       if (enqueued >= capacity) break;
-      after = symbol;
+      if (priority.has(symbol)) priorityAfter = symbol; else after = symbol;
       const dedupeKey = `scheduled:prices:v1:${symbol}:${plan.slotStart}`;
       if (existingKeys.has(dedupeKey)) { alreadyScheduled++; continue; }
       if (busySymbols.has(symbol)) { busy++; continue; }
@@ -69,7 +78,7 @@ export async function schedulePriceCollection(db: PrismaClient, calendar: Market
     if (pending.length) await tx.job.createMany({ data: pending, skipDuplicates: true });
     await tx.pollingCheckpoint.update({ where: { id: checkpoint.id }, data: {
       lastAttemptAt: at, lastSuccessAt: at, lastErrorCode: null, updatedAt: at,
-      cursor: { slotStart: plan.slotStart, mode: plan.mode, enqueued, busy, outsideUniverse, after, totalEligible: stocks.length, batchSize, intervalMs, cadenceMs },
+      cursor: { slotStart: plan.slotStart, mode: plan.mode, enqueued, busy, alreadyScheduled, outsideUniverse, after, priorityAfter, watchlistCount: priority.size, totalEligible: stocks.length, batchSize, intervalMs, cadenceMs },
     } });
     return { ...plan, enqueued, busy, alreadyScheduled, outsideUniverse };
   }, { timeout: 15000 });

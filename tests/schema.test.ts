@@ -62,7 +62,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.$executeRaw`TRUNCATE research_allowance_uses, universe_imports, daily_briefings, feed_items, instruments, announcements, signals, signal_evidence,
-    analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback,
+    analyses, alerts, delivery_attempts, jobs, polling_checkpoints, feedback, watchlist_entries,
     performance_outcomes CASCADE`;
 });
 
@@ -987,6 +987,37 @@ describe("MVP workflow regression checks", () => {
     expect((await schedulePriceCollection(db, calendar, [], 7, new Date(at.getTime() + 300000), 10)).enqueued).toBe(10);
     const jobs = await db.job.findMany({ orderBy: { runAfter: "asc" } });
     expect(new Set(jobs.map((j) => (j.payload as { symbol: string }).symbol)).size).toBe(20);
+  });
+  it("schedules watchlist symbols in every slot while rotating the rest of the universe", async () => {
+    const { schedulePriceCollection } = await import("../src/lib/market-data/scheduler");
+    const { WORKSPACE_OWNER } = await import("../src/lib/dashboard/read-state");
+    await db.instrument.createMany({ data: Array.from({ length: 25 }, (_, i) => ({ exchange: "NSE", symbol: `W${String(i).padStart(2, "0")}`, name: "Synthetic", active: true, inUniverse: true })) });
+    const watched = await db.instrument.findUniqueOrThrow({ where: { exchange_symbol: { exchange: "NSE", symbol: "W24" } } });
+    await db.watchlistEntry.create({ data: { ownerKey: WORKSPACE_OWNER, instrumentId: watched.id } });
+    const calendar = parseCalendar({ source: "synthetic", coverageStart: "2026-11-01", coverageEnd: "2026-11-30", holidays: [], specialSessions: [] });
+    const at = new Date("2026-11-05T04:00:00Z");
+    const firstJobs = async () => (await db.job.findMany({ where: { kind: "prices.collect" }, select: { dedupeKey: true } })).map((j) => j.dedupeKey);
+    const checkpointCursor = async () => (await db.pollingCheckpoint.findUniqueOrThrow({ where: { source_scope: { source: "swing-scheduler", scope: "prices-v1" } } })).cursor as { slotStart: string };
+    expect((await schedulePriceCollection(db, calendar, [], 7, at, 5)).enqueued).toBe(5);
+    const firstSlot = (await checkpointCursor()).slotStart;
+    expect(await firstJobs()).toEqual(expect.arrayContaining([
+      `scheduled:prices:v1:W24:${firstSlot}`, `scheduled:prices:v1:W00:${firstSlot}`,
+      `scheduled:prices:v1:W01:${firstSlot}`, `scheduled:prices:v1:W02:${firstSlot}`,
+      `scheduled:prices:v1:W03:${firstSlot}`,
+    ]));
+    const before = await firstJobs();
+    await db.job.updateMany({ where: { kind: "prices.collect" }, data: { status: "succeeded", completedAt: new Date() } });
+    expect((await schedulePriceCollection(db, calendar, [], 7, new Date(at.getTime() + 300000), 5)).enqueued).toBe(5);
+    const secondSlot = (await checkpointCursor()).slotStart;
+    const added = (await firstJobs()).filter((key) => !before.includes(key));
+    expect(added).toEqual(expect.arrayContaining([
+      `scheduled:prices:v1:W24:${secondSlot}`, `scheduled:prices:v1:W04:${secondSlot}`,
+      `scheduled:prices:v1:W05:${secondSlot}`, `scheduled:prices:v1:W06:${secondSlot}`,
+      `scheduled:prices:v1:W07:${secondSlot}`,
+    ]));
+    expect(await db.pollingCheckpoint.findUniqueOrThrow({ where: { source_scope: { source: "swing-scheduler", scope: "prices-v1" } } })).toMatchObject({
+      cursor: { after: "W07", priorityAfter: "W24", watchlistCount: 1 },
+    });
   });
   it("keeps successful source imports when another source fails and matches BSE codes without name guessing", async () => {
     const { collectSource } = await import("../src/lib/announcements/sources");
